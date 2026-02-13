@@ -46,14 +46,22 @@ export default function AccountsPage() {
 
     function openEdit(acc: Account) {
         setEditing(acc)
-        setForm({ name: acc.name, type: acc.type, balance: String(acc.balance || 0), color: acc.color || '#10B981' })
+        setForm({
+            name: acc.name,
+            type: acc.type,
+            balance: (acc.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 }),
+            color: acc.color || '#10B981'
+        })
         setShowModal(true)
     }
 
     async function handleSave(e: React.FormEvent) {
         e.preventDefault()
         setSaving(true)
-        const payload = { name: form.name, type: form.type, balance: parseFloat(form.balance || '0'), color: form.color, household_id: householdId }
+        const balanceValue = typeof form.balance === 'string'
+            ? parseFloat(form.balance.replace(/\./g, '').replace(',', '.'))
+            : form.balance
+        const payload = { name: form.name, type: form.type, balance: balanceValue || 0, color: form.color, household_id: householdId }
 
         if (editing) {
             await supabase.from('accounts').update(payload).eq('id', editing.id)
@@ -87,43 +95,46 @@ export default function AccountsPage() {
 
     return (
         <div className="fade-in">
-            <div className="page-header">
-                <div>
-                    <h1 className="page-title">Contas</h1>
-                    <p className="page-subtitle">Saldo total: {formatCurrency(totalBalance)}</p>
+            <div className="page-header-pro">
+                <div className="title-group">
+                    <h1>Contas</h1>
+                    <p>Saldo total consolidado: <strong style={{ color: 'var(--color-accent)' }}>{formatCurrency(totalBalance)}</strong></p>
                 </div>
-                <button className="btn btn-primary" onClick={openCreate}><Plus size={16} /> Nova Conta</button>
+                <button className="btn-nova-tx" onClick={openCreate}><Plus size={20} /> Nova Conta</button>
             </div>
 
             {accounts.length > 0 ? (
-                <div className="stagger-container" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                <div className="stagger-container" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 20 }}>
                     {accounts.map(acc => {
                         const typeInfo = ACCOUNT_TYPES.find(t => t.value === acc.type)
                         const Icon = typeInfo?.icon || Wallet
                         return (
-                            <div key={acc.id} className="glass-card card-hover-lift stagger-item" style={{ borderLeft: `3px solid ${acc.color || '#10B981'}` }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div key={acc.id} className="budget-card card-hover-lift stagger-item" style={{ borderLeft: `4px solid ${acc.color || '#10B981'}` }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                         <div style={{
-                                            width: 40, height: 40, borderRadius: 10, display: 'flex', alignItems: 'center',
-                                            justifyContent: 'center', background: (acc.color || '#10B981') + '20',
+                                            width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center',
+                                            justifyContent: 'center', background: (acc.color || '#10B981') + '15',
+                                            border: `1px solid ${(acc.color || '#10B981') + '30'}`
                                         }}>
-                                            <Icon size={20} style={{ color: acc.color || '#10B981' }} />
+                                            <Icon size={22} style={{ color: acc.color || '#10B981' }} />
                                         </div>
                                         <div>
-                                            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{acc.name}</div>
-                                            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>{typeInfo?.label}</div>
+                                            <div style={{ fontWeight: 700, fontSize: 16 }}>{acc.name}</div>
+                                            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', fontWeight: 500 }}>{typeInfo?.label}</div>
                                         </div>
                                     </div>
                                     <div style={{ display: 'flex', gap: 4 }}>
-                                        <button className="btn btn-icon btn-ghost btn-sm" onClick={() => openEdit(acc)}><Pencil size={14} /></button>
+                                        <button className="btn btn-icon btn-ghost btn-sm" onClick={() => openEdit(acc)} style={{ borderRadius: 8 }}><Pencil size={15} /></button>
                                         <button className="btn btn-icon btn-ghost btn-sm" onClick={() => handleDelete(acc.id)}
-                                            style={{ color: 'var(--color-danger)' }}><Trash2 size={14} /></button>
+                                            style={{ color: 'var(--color-danger)', borderRadius: 8 }}><Trash2 size={15} /></button>
                                     </div>
                                 </div>
+
+                                <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--color-text-tertiary)', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 4 }}>Saldo Atual</div>
                                 <div style={{
-                                    fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', fontWeight: 700,
-                                    color: (acc.balance || 0) >= 0 ? 'var(--color-success)' : 'var(--color-danger)'
+                                    fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800,
+                                    color: (acc.balance || 0) >= 0 ? 'var(--color-text-primary)' : 'var(--color-danger)'
                                 }}>
                                     {formatCurrency(acc.balance || 0)}
                                 </div>
@@ -141,16 +152,16 @@ export default function AccountsPage() {
 
             {showModal && (
                 <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
-                        <div className="modal-header">
+                    <div className="modal-content-pro" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 440 }}>
+                        <div className="modal-header-pro">
                             <h2>{editing ? 'Editar' : 'Nova'} Conta</h2>
-                            <button className="btn btn-icon btn-ghost" onClick={() => setShowModal(false)}><X size={18} /></button>
+                            <button className="btn btn-icon btn-ghost" onClick={() => setShowModal(false)}><X size={20} /></button>
                         </div>
                         <form onSubmit={handleSave}>
-                            <div className="modal-body">
+                            <div className="modal-body-pro">
                                 <div className="input-group">
-                                    <label className="input-label">Nome</label>
-                                    <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required placeholder="Ex: Nubank" />
+                                    <label className="input-label">Nome da Conta</label>
+                                    <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required placeholder="Ex: Nubank, Carteira..." />
                                 </div>
                                 <div className="grid-2">
                                     <div className="input-group">
@@ -161,19 +172,33 @@ export default function AccountsPage() {
                                     </div>
                                     <div className="input-group">
                                         <label className="input-label">Saldo Inicial (R$)</label>
-                                        <input className="input" type="number" step="0.01" value={form.balance}
-                                            onChange={e => setForm(f => ({ ...f, balance: e.target.value }))} placeholder="0,00" />
+                                        <input
+                                            className="input"
+                                            value={form.balance}
+                                            onChange={(e) => {
+                                                let value = e.target.value.replace(/\D/g, "")
+                                                const balance = (Number(value) / 100).toLocaleString("pt-BR", {
+                                                    minimumFractionDigits: 2,
+                                                    maximumFractionDigits: 2,
+                                                })
+                                                setForm((f) => ({ ...f, balance }))
+                                            }}
+                                            placeholder="0,00"
+                                            required
+                                        />
                                     </div>
                                 </div>
                                 <div className="input-group">
-                                    <label className="input-label">Cor</label>
-                                    <div style={{ display: 'flex', gap: 8 }}>
+                                    <label className="input-label">Cor de Identificação</label>
+                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                                         {ACC_COLORS.map(c => (
                                             <button key={c} type="button"
                                                 style={{
-                                                    width: 32, height: 32, borderRadius: '50%', background: c,
+                                                    width: 36, height: 36, borderRadius: 12, background: c,
                                                     border: form.color === c ? '3px solid #fff' : '2px solid transparent',
-                                                    cursor: 'pointer', transition: 'all 0.15s',
+                                                    boxShadow: form.color === c ? `0 0 0 2px ${c}` : 'none',
+                                                    cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                                                    transform: form.color === c ? 'scale(1.1)' : 'scale(1)',
                                                 }}
                                                 onClick={() => setForm(f => ({ ...f, color: c }))}
                                             />
@@ -181,10 +206,10 @@ export default function AccountsPage() {
                                     </div>
                                 </div>
                             </div>
-                            <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancelar</button>
-                                <button type="submit" className="btn btn-primary" disabled={saving}>
-                                    {saving ? <><span className="spinner" /> Salvando...</> : editing ? 'Salvar' : 'Criar'}
+                            <div className="modal-footer-pro">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)} style={{ borderRadius: 10 }}>Cancelar</button>
+                                <button type="submit" className="btn btn-primary" disabled={saving} style={{ background: 'var(--color-accent)', border: 'none', borderRadius: 10, padding: '0 24px' }}>
+                                    {saving ? 'Salvando...' : editing ? 'Salvar Alterações' : 'Criar Conta'}
                                 </button>
                             </div>
                         </form>

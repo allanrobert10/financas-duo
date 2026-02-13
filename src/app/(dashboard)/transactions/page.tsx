@@ -68,7 +68,7 @@ export default function TransactionsPage() {
     function openEdit(tx: Transaction) {
         setEditing(tx)
         setForm({
-            description: tx.description, amount: String(tx.amount), type: tx.type,
+            description: tx.description, amount: tx.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 }), type: tx.type,
             category_id: tx.category_id || '', account_id: tx.account_id || '',
             card_id: tx.card_id || '', date: tx.date, notes: tx.notes || '',
             is_recurring: tx.is_recurring || false, recurrence_type: tx.recurrence_type || '',
@@ -83,7 +83,7 @@ export default function TransactionsPage() {
 
         const basePayload = {
             description: form.description,
-            amount: parseFloat(form.amount),
+            amount: parseFloat(form.amount.replace(/\./g, '').replace(',', '.')),
             type: form.type,
             category_id: form.category_id || null,
             account_id: form.account_id || null,
@@ -171,42 +171,40 @@ export default function TransactionsPage() {
 
     return (
         <div className="fade-in">
-            <header className="header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-                <div>
-                    <h1 className="title">Transações</h1>
-                    <p className="text-muted">Gerencie suas receitas e despesas</p>
+            <header className="page-header-pro">
+                <div className="title-group">
+                    <h1>Transações</h1>
+                    <p>Gerencie suas receitas e despesas com precisão</p>
                 </div>
-                <button className="btn btn-primary" onClick={openCreate}>
-                    <Plus size={18} /> Nova Transação
+                <button className="btn-nova-tx" onClick={openCreate}>
+                    <Plus size={20} /> Nova Transação
                 </button>
             </header>
 
             {/* Filters */}
-            <div style={{ display: 'flex', gap: 12, marginBottom: 'var(--space-6)', borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--space-4)' }}>
+            <div className="filter-bar">
                 <button
-                    className={`btn btn-sm ${filterType === 'all' ? 'btn-secondary' : 'btn-ghost'}`}
+                    className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
                     onClick={() => setFilterType('all')}>
                     Todas
                 </button>
                 <button
-                    className={`btn btn-sm ${filterType === 'income' ? 'btn-secondary' : 'btn-ghost'}`}
-                    onClick={() => setFilterType('income')}
-                    style={{ color: filterType === 'income' ? 'var(--color-success)' : undefined }}>
-                    Receitas
+                    className={`filter-btn ${filterType === 'income' ? 'active income' : ''}`}
+                    onClick={() => setFilterType('income')}>
+                    <TrendingUp size={16} /> Receitas
                 </button>
                 <button
-                    className={`btn btn-sm ${filterType === 'expense' ? 'btn-secondary' : 'btn-ghost'}`}
-                    onClick={() => setFilterType('expense')}
-                    style={{ color: filterType === 'expense' ? 'var(--color-danger)' : undefined }}>
-                    Despesas
+                    className={`filter-btn ${filterType === 'expense' ? 'active expense' : ''}`}
+                    onClick={() => setFilterType('expense')}>
+                    <TrendingDown size={16} /> Despesas
                 </button>
             </div>
 
             {/* Table */}
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-                <div className="table-container">
-                    <table className="table">
-                        <thead>
+            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+                        <thead className="pro-table-header">
                             <tr>
                                 <th>Data</th>
                                 <th>Descrição</th>
@@ -219,51 +217,105 @@ export default function TransactionsPage() {
                         <tbody>
                             {filteredTx.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-secondary)' }}>
-                                        Nenhuma transação encontrada.
+                                    <td colSpan={6} style={{ textAlign: 'center', padding: 'var(--space-16)', color: 'var(--color-text-tertiary)' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)' }}>
+                                            <div style={{ padding: 'var(--space-4)', background: 'var(--color-bg-tertiary)', borderRadius: '50%' }}>
+                                                <TrendingUp size={24} style={{ opacity: 0.5 }} />
+                                            </div>
+                                            <p>Nenhuma transação encontrada.</p>
+                                        </div>
                                     </td>
                                 </tr>
                             ) : (
-                                filteredTx.map(t => (
-                                    <tr key={t.id}>
-                                        <td>{formatDate(t.date)}</td>
-                                        <td>
-                                            <div style={{ fontWeight: 500 }}>{t.description}</div>
+                                filteredTx.map((t, index) => (
+                                    <tr key={t.id} style={{
+                                        transition: 'background-color 0.2s',
+                                        backgroundColor: index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)' // subtle striping
+                                    }}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-bg-card-hover)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)'}
+                                    >
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+                                            {formatDate(t.date)}
+                                        </td>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                            <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{t.description}</div>
                                             {(t.installment_id || (t.is_recurring && t.recurrence_type === 'installment')) && (
-                                                <span className="badge badge-outline" style={{ fontSize: 10, padding: '2px 6px', marginTop: 4 }}>
+                                                <span style={{
+                                                    fontSize: 10,
+                                                    padding: '2px 8px',
+                                                    marginTop: 4,
+                                                    borderRadius: 'var(--radius-full)',
+                                                    background: 'var(--color-bg-tertiary)',
+                                                    border: '1px solid var(--color-border)',
+                                                    color: 'var(--color-text-secondary)',
+                                                    display: 'inline-block'
+                                                }}>
                                                     Parcelado
                                                 </span>
                                             )}
                                         </td>
-                                        <td>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                {/* Icon placeholder or check category icon if available */}
-                                                <span className="badge badge-secondary">{categories.find(c => c.id === t.category_id)?.name || 'Sem categoria'}</span>
-                                            </div>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                            <span style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                padding: '4px 10px',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--color-bg-tertiary)',
+                                                fontSize: 'var(--text-xs)',
+                                                fontWeight: 500,
+                                                color: 'var(--color-text-secondary)'
+                                            }}>
+                                                {categories.find(c => c.id === t.category_id)?.name || 'Sem categoria'}
+                                            </span>
                                         </td>
-                                        <td>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                             {t.account_id ? (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                                                    <Wallet size={14} className="text-muted" />
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                                                    <div style={{ padding: 6, background: 'var(--color-bg-tertiary)', borderRadius: '50%' }}>
+                                                        <Wallet size={14} />
+                                                    </div>
                                                     {accounts.find(a => a.id === t.account_id)?.name}
                                                 </div>
                                             ) : t.card_id ? (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                                                    <CreditCard size={14} className="text-muted" />
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                                                    <div style={{ padding: 6, background: 'var(--color-bg-tertiary)', borderRadius: '50%' }}>
+                                                        <CreditCard size={14} />
+                                                    </div>
                                                     {cards.find(c => c.id === t.card_id)?.name}
                                                 </div>
                                             ) : '-'}
                                         </td>
-                                        <td style={{ textAlign: 'right', fontWeight: 600, color: t.type === 'income' ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                                            {t.type === 'expense' ? '-' : '+'}{formatCurrency(t.amount)}
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', textAlign: 'right' }}>
+                                            <div style={{
+                                                fontWeight: 600,
+                                                color: t.type === 'income' ? 'var(--color-success)' : 'var(--color-text-primary)',
+                                                fontFamily: 'var(--font-mono)' // Use monospaced font if available or fallback
+                                            }}>
+                                                {t.type === 'expense' ? '- ' : '+ '}{formatCurrency(t.amount)}
+                                            </div>
                                         </td>
-                                        <td style={{ textAlign: 'center' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'center', gap: 4 }}>
-                                                <button className="btn btn-icon btn-ghost btn-sm" onClick={() => openEdit(t)} title="Editar">
-                                                    <Pencil size={14} />
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', textAlign: 'center' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+                                                <button
+                                                    className="btn-icon"
+                                                    onClick={() => openEdit(t)}
+                                                    title="Editar"
+                                                    style={{ color: 'var(--color-text-secondary)', cursor: 'pointer', background: 'transparent', border: 'none' }}
+                                                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--color-accent)'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--color-text-secondary)'}
+                                                >
+                                                    <Pencil size={16} />
                                                 </button>
-                                                <button className="btn btn-icon btn-ghost btn-sm" onClick={() => handleDelete(t.id)} title="Excluir" style={{ color: 'var(--color-danger)' }}>
-                                                    <Trash2 size={14} />
+                                                <button
+                                                    className="btn-icon"
+                                                    onClick={() => handleDelete(t.id)}
+                                                    title="Excluir"
+                                                    style={{ color: 'var(--color-text-secondary)', cursor: 'pointer', background: 'transparent', border: 'none' }}
+                                                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--color-danger)'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--color-text-secondary)'}
+                                                >
+                                                    <Trash2 size={16} />
                                                 </button>
                                             </div>
                                         </td>
@@ -278,40 +330,26 @@ export default function TransactionsPage() {
             {/* Modal */}
             {showModal && (
                 <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
-                        <div className="modal-header">
+                    <div className="modal-content-pro" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 500 }}>
+                        <div className="modal-header-pro">
                             <h2>{editing ? 'Editar' : 'Nova'} Transação</h2>
-                            <button className="btn btn-icon btn-ghost" onClick={() => setShowModal(false)}><X size={18} /></button>
+                            <button className="btn btn-icon btn-ghost" onClick={() => setShowModal(false)}><X size={20} /></button>
                         </div>
                         <form onSubmit={handleSave}>
-                            <div className="modal-body">
+                            <div className="modal-body-pro">
                                 {/* Type Toggle */}
                                 <div className="input-group">
                                     <label className="input-label">Tipo de Transação</label>
-                                    <div style={{ display: 'flex', gap: 8, background: 'var(--color-bg-secondary)', padding: 4, borderRadius: 'var(--radius-md)' }}>
+                                    <div className="type-toggle-pro">
                                         <button type="button"
-                                            className={`btn ${form.type === 'expense' ? 'active' : ''}`}
-                                            style={{
-                                                flex: 1,
-                                                background: form.type === 'expense' ? 'var(--color-danger)' : 'transparent',
-                                                color: form.type === 'expense' ? '#fff' : 'var(--color-text-secondary)',
-                                                border: 'none',
-                                                justifyContent: 'center'
-                                            }}
+                                            className={`type-btn-pro ${form.type === 'expense' ? 'active expense' : ''}`}
                                             onClick={() => setForm(f => ({ ...f, type: 'expense', category_id: '' }))}>
-                                            <TrendingDown size={16} /> Despesa
+                                            <TrendingDown size={18} /> Despesa
                                         </button>
                                         <button type="button"
-                                            className={`btn ${form.type === 'income' ? 'active' : ''}`}
-                                            style={{
-                                                flex: 1,
-                                                background: form.type === 'income' ? 'var(--color-success)' : 'transparent',
-                                                color: form.type === 'income' ? '#fff' : 'var(--color-text-secondary)',
-                                                border: 'none',
-                                                justifyContent: 'center'
-                                            }}
+                                            className={`type-btn-pro ${form.type === 'income' ? 'active income' : ''}`}
                                             onClick={() => setForm(f => ({ ...f, type: 'income', category_id: '' }))}>
-                                            <TrendingUp size={16} /> Receita
+                                            <TrendingUp size={18} /> Receita
                                         </button>
                                     </div>
                                 </div>
@@ -326,8 +364,20 @@ export default function TransactionsPage() {
                                 <div className="grid-2">
                                     <div className="input-group">
                                         <label className="input-label">Valor (R$)</label>
-                                        <input className="input" type="number" step="0.01" min="0.01" value={form.amount}
-                                            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} required />
+                                        <input
+                                            className="input"
+                                            value={form.amount}
+                                            onChange={(e) => {
+                                                let value = e.target.value.replace(/\D/g, "")
+                                                const amount = (Number(value) / 100).toLocaleString("pt-BR", {
+                                                    minimumFractionDigits: 2,
+                                                    maximumFractionDigits: 2,
+                                                })
+                                                setForm((f) => ({ ...f, amount }))
+                                            }}
+                                            placeholder="0,00"
+                                            required
+                                        />
                                     </div>
                                     <div className="input-group">
                                         <label className="input-label">Data</label>
@@ -346,24 +396,28 @@ export default function TransactionsPage() {
                                     </select>
                                 </div>
 
-                                {/* Payment Method (Exclusive Selection) */}
+                                {/* Payment Method (Visual Cards) */}
                                 <div className="input-group">
-                                    <label className="input-label">Forma de Pagamento</label>
-                                    <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                            <input type="radio" name="payment_method"
-                                                checked={!!form.account_id}
-                                                onChange={() => setForm(f => ({ ...f, account_id: accounts[0]?.id || '', card_id: '' }))}
-                                            />
-                                            <Wallet size={16} /> Conta
-                                        </label>
-                                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                                            <input type="radio" name="payment_method"
-                                                checked={!!form.card_id}
-                                                onChange={() => setForm(f => ({ ...f, card_id: cards[0]?.id || '', account_id: '' }))}
-                                            />
-                                            <CreditCard size={16} /> Cartão de Crédito
-                                        </label>
+                                    <label className="input-label" style={{ marginBottom: 12 }}>Forma de Pagamento</label>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                                        <div
+                                            className={`payment-method-card ${form.account_id ? 'active' : ''}`}
+                                            onClick={() => setForm(f => ({ ...f, account_id: accounts[0]?.id || '', card_id: '' }))}
+                                        >
+                                            <div style={{ background: form.account_id ? 'var(--color-accent)' : 'var(--color-bg-secondary)', padding: 8, borderRadius: 8, color: form.account_id ? 'white' : 'inherit' }}>
+                                                <Wallet size={18} />
+                                            </div>
+                                            <span style={{ fontWeight: 600, fontSize: 13 }}>Conta</span>
+                                        </div>
+                                        <div
+                                            className={`payment-method-card ${form.card_id ? 'active' : ''}`}
+                                            onClick={() => setForm(f => ({ ...f, card_id: cards[0]?.id || '', account_id: '' }))}
+                                        >
+                                            <div style={{ background: form.card_id ? 'var(--color-accent)' : 'var(--color-bg-secondary)', padding: 8, borderRadius: 8, color: form.card_id ? 'white' : 'inherit' }}>
+                                                <CreditCard size={18} />
+                                            </div>
+                                            <span style={{ fontWeight: 600, fontSize: 13 }}>Cartão</span>
+                                        </div>
                                     </div>
 
                                     {!!form.account_id && (
@@ -384,17 +438,19 @@ export default function TransactionsPage() {
                                 </div>
 
                                 {/* Recurrence / Installments */}
-                                <div className="input-group" style={{ background: 'var(--color-bg-secondary)', padding: 12, borderRadius: 'var(--radius-md)' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: form.is_recurring ? 12 : 0 }}>
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 16, border: '1px solid var(--color-border)' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: form.is_recurring ? 16 : 0 }}>
                                         <input type="checkbox" checked={form.is_recurring}
-                                            onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked, recurrence_type: e.target.checked ? 'fixed' : '' }))} />
-                                        <span style={{ fontWeight: 500 }}>Repetir essa transação?</span>
+                                            onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked, recurrence_type: e.target.checked ? 'fixed' : '' }))}
+                                            style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer' }}
+                                        />
+                                        <span style={{ fontWeight: 600, fontSize: 14 }}>Transação recorrente ou parcelada?</span>
                                     </label>
 
                                     {form.is_recurring && (
-                                        <div className="grid-2">
+                                        <div className="grid-2" style={{ animation: 'fade-in 0.3s' }}>
                                             <div>
-                                                <label className="input-label" style={{ fontSize: 12 }}>Frequência</label>
+                                                <label className="input-label" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Frequência</label>
                                                 <select className="input select" value={form.recurrence_type}
                                                     onChange={e => setForm(f => ({ ...f, recurrence_type: e.target.value }))}>
                                                     <option value="fixed">Fixo (Mensal)</option>
@@ -403,7 +459,7 @@ export default function TransactionsPage() {
                                             </div>
                                             {form.recurrence_type === 'installment' && (
                                                 <div>
-                                                    <label className="input-label" style={{ fontSize: 12 }}>Número de Parcelas</label>
+                                                    <label className="input-label" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Número de Parcelas</label>
                                                     <input className="input" type="number" min="2" max="120" value={form.installments_count}
                                                         onChange={e => setForm(f => ({ ...f, installments_count: parseInt(e.target.value) || 2 }))} />
                                                 </div>
@@ -418,10 +474,10 @@ export default function TransactionsPage() {
                                     <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Opcional" />
                                 </div>
                             </div>
-                            <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancelar</button>
-                                <button type="submit" className="btn btn-primary" disabled={saving}>
-                                    {saving ? <><span className="spinner" /> Salvando...</> : editing ? 'Salvar Alterações' : 'Adicionar Transação'}
+                            <div className="modal-footer-pro">
+                                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)} style={{ borderRadius: 10 }}>Cancelar</button>
+                                <button type="submit" className="btn btn-primary" disabled={saving} style={{ background: 'var(--color-accent)', border: 'none', borderRadius: 10, padding: '0 24px' }}>
+                                    {saving ? <><span className="spinner" /> Salvando...</> : editing ? 'Salvar Alterações' : 'Confirmar Transação'}
                                 </button>
                             </div>
                         </form>

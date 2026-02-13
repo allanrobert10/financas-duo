@@ -6,6 +6,7 @@ import type { Profile } from '@/types/database'
 import { User, Save, Check, Mail, UserPlus, Crown, X, Copy, Users, Lock, Eye, EyeOff, Trash2, FileSpreadsheet, Upload, Download } from 'lucide-react'
 import { generateTemplate, exportTransactions, parseImport, type TransactionImportData } from '@/utils/excel'
 import { getAppUrl } from '@/lib/url'
+import { DeleteAccountModal } from '@/components/DeleteAccountModal'
 
 const PASSWORD_RULES = [
     { key: 'length', label: 'Mínimo 8 caracteres', test: (p: string) => p.length >= 8 },
@@ -55,6 +56,7 @@ export default function SettingsPage() {
     const [importing, setImporting] = useState(false)
     const [exporting, setExporting] = useState(false)
     const [dataMsg, setDataMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+    const [showDeleteModal, setShowDeleteModal] = useState(false)
 
     // Password change state
     const [currentPassword, setCurrentPassword] = useState('')
@@ -414,10 +416,10 @@ export default function SettingsPage() {
 
     return (
         <div>
-            <div className="page-header">
-                <div>
-                    <h1 className="page-title">Configurações</h1>
-                    <p className="page-subtitle">Gerencie seu perfil e preferências</p>
+            <div className="page-header-pro">
+                <div className="title-group">
+                    <h1>Configurações</h1>
+                    <p>Gerencie sua conta, família e preferências do sistema</p>
                 </div>
             </div>
 
@@ -782,34 +784,32 @@ export default function SettingsPage() {
 
                     <button
                         className="btn btn-danger"
-                        onClick={async () => {
-                            if (!profile?.household_id) return
-                            const confirmed = confirm('ATENÇÃO: Isso apagará TODAS as transações, contas, categorias e orçamentos do seu Lar.\n\nEssa ação é IRREVERSÍVEL.\n\nTem certeza absoluta?')
-                            if (!confirmed) return
-
-                            const doubleConfirmed = prompt(`Para confirmar, digite "DELETAR" (sem aspas):`)
-                            if (doubleConfirmed !== 'DELETAR') {
-                                alert('Ação cancelada. O texto digitado não confere.')
-                                return
-                            }
-
-                            setSaving(true)
-                            const { error } = await supabase.rpc('reset_household_data', { target_household_id: profile.household_id })
-                            setSaving(false)
-
-                            if (error) {
-                                alert('Erro ao zerar conta: ' + error.message)
-                            } else {
-                                alert('Conta zerada com sucesso. Todos os dados financeiros foram removidos.')
-                                window.location.reload()
-                            }
-                        }}
+                        onClick={() => setShowDeleteModal(true)}
                         disabled={saving}
                     >
-                        {saving ? 'Processando...' : 'ZERAR CONTA (Irreversível)'}
+                        ZERAR CONTA (Irreversível)
                     </button>
                 </div>
             )}
+
+            <DeleteAccountModal
+                isOpen={showDeleteModal}
+                onClose={() => setShowDeleteModal(false)}
+                onConfirm={async () => {
+                    if (!profile?.household_id) return
+
+                    const { error } = await supabase.rpc('reset_household_data', { target_household_id: profile.household_id })
+
+                    if (error) {
+                        alert('Erro ao zerar conta: ' + error.message)
+                        setShowDeleteModal(false)
+                    } else {
+                        alert('Conta zerada com sucesso. Todos os dados financeiros foram removidos.')
+                        window.location.reload()
+                    }
+                }}
+                isLoading={saving}
+            />
         </div>
     )
 }

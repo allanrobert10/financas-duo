@@ -58,7 +58,7 @@ export default function CardsPage() {
         setEditing(card)
         setForm({
             name: card.name, last_four: card.last_four || '', brand: card.brand || 'visa',
-            credit_limit: card.credit_limit ? String(card.credit_limit) : '',
+            credit_limit: card.credit_limit ? card.credit_limit.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '',
             closing_day: String(card.closing_day), due_day: String(card.due_day),
             best_purchase_day: card.best_purchase_day ? String(card.best_purchase_day) : '',
             is_primary: card.is_primary || false, color: card.color || '#6366F1',
@@ -69,9 +69,12 @@ export default function CardsPage() {
     async function handleSave(e: React.FormEvent) {
         e.preventDefault()
         setSaving(true)
+        const limitValue = typeof form.credit_limit === 'string'
+            ? parseFloat(form.credit_limit.replace(/\./g, '').replace(',', '.'))
+            : form.credit_limit
         const payload = {
             name: form.name, last_four: form.last_four || null, brand: form.brand,
-            credit_limit: form.credit_limit ? parseFloat(form.credit_limit) : null,
+            credit_limit: limitValue || null,
             closing_day: parseInt(form.closing_day), due_day: parseInt(form.due_day),
             best_purchase_day: form.best_purchase_day ? parseInt(form.best_purchase_day) : null,
             is_primary: form.is_primary, color: form.color, household_id: householdId,
@@ -207,8 +210,19 @@ export default function CardsPage() {
                                 </div>
                                 <div className="input-group">
                                     <label className="input-label">Limite de Crédito (R$)</label>
-                                    <input className="input" type="number" step="0.01" value={form.credit_limit}
-                                        onChange={e => setForm(f => ({ ...f, credit_limit: e.target.value }))} placeholder="Opcional" />
+                                    <input
+                                        className="input"
+                                        value={form.credit_limit}
+                                        onChange={(e) => {
+                                            let value = e.target.value.replace(/\D/g, "")
+                                            const limit = (Number(value) / 100).toLocaleString("pt-BR", {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2,
+                                            })
+                                            setForm((f) => ({ ...f, credit_limit: limit }))
+                                        }}
+                                        placeholder="0,00"
+                                    />
                                 </div>
                                 <div className="grid-3" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
                                     <div className="input-group">

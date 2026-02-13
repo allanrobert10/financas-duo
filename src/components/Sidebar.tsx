@@ -21,7 +21,6 @@ const navItems = [
     { href: '/accounts', icon: Wallet, label: 'Contas' },
     { href: '/categories', icon: FolderOpen, label: 'Categorias' },
     { href: '/tags', icon: Tags, label: 'Tags' },
-    { href: '/budgets', icon: PieChart, label: 'Orçamentos' },
     { label: 'Sistema', section: 'sistema' },
     { href: '/settings', icon: Settings, label: 'Configurações' },
 ]

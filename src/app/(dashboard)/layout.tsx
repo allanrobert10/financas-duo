@@ -5,26 +5,9 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { Profile } from '@/types/database'
-import {
-    LayoutDashboard, ArrowLeftRight, CreditCard, Tags, Wallet,
-    PieChart, Settings, LogOut, Menu, X, FolderOpen, Sun, Moon
-} from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
 import { Sidebar } from '@/components/Sidebar'
-
-const navItems = [
-    { label: 'Visão Geral', section: 'principal' },
-    { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
-    { href: '/transactions', icon: ArrowLeftRight, label: 'Transações' },
-    { label: 'Gerenciar', section: 'gerenciar' },
-    { href: '/cards', icon: CreditCard, label: 'Cartões' },
-    { href: '/accounts', icon: Wallet, label: 'Contas' },
-    { href: '/categories', icon: FolderOpen, label: 'Categorias' },
-    { href: '/tags', icon: Tags, label: 'Tags' },
-    { href: '/budgets', icon: PieChart, label: 'Orçamentos' },
-    { label: 'Sistema', section: 'sistema' },
-    { href: '/settings', icon: Settings, label: 'Configurações' },
-]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname()
