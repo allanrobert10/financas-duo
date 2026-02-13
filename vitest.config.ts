@@ -7,9 +7,10 @@ export default defineConfig({
     test: {
         globals: true,
         environment: 'jsdom',
-        setupFiles: ['./src/tests/setup.ts'],
+        setupFiles: ['./src/tests/setup.ts', 'allure-vitest/setup'],
         include: ['src/tests/**/*.test.{ts,tsx}'],
         css: false,
+        reporters: ['default', ['allure-vitest/reporter', { resultsDir: './allure-results' }]],
     },
     resolve: {
         alias: {

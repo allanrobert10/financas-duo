@@ -1,6 +1,6 @@
-'use client'
-
-import { createContext, useContext, useEffect, useState } from 'react'
+"use client"
+import React, { createContext, useContext, useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
 
 type Theme = 'light' | 'dark'
 
@@ -9,42 +9,48 @@ interface ThemeContextType {
     toggleTheme: () => void
 }
 
-const ThemeContext = createContext<ThemeContextType>({
-    theme: 'light',
-    toggleTheme: () => { },
-})
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-    const [theme, setTheme] = useState<Theme>('light')
+    const [theme, setTheme] = useState<Theme>('dark') // Default to dark instead of system
     const [mounted, setMounted] = useState(false)
 
     useEffect(() => {
-        const saved = localStorage.getItem('financas-duo-theme') as Theme | null
-        const initial = saved || 'light'
-        setTheme(initial)
-        document.documentElement.setAttribute('data-theme', initial)
         setMounted(true)
+        // Check localStorage first
+        const saved = localStorage.getItem('theme') as Theme
+        if (saved) {
+            setTheme(saved)
+            document.documentElement.setAttribute('data-theme', saved)
+        } else {
+            // Default to dark if nothing saved
+            setTheme('dark')
+            document.documentElement.setAttribute('data-theme', 'dark')
+        }
     }, [])
 
     function toggleTheme() {
-        const next = theme === 'light' ? 'dark' : 'light'
-        setTheme(next)
-        document.documentElement.setAttribute('data-theme', next)
-        localStorage.setItem('financas-duo-theme', next)
-    }
-
-    // Prevent flash of wrong theme
-    if (!mounted) {
-        return <>{children}</>
+        const newTheme = theme === 'light' ? 'dark' : 'light'
+        setTheme(newTheme)
+        localStorage.setItem('theme', newTheme)
+        document.documentElement.setAttribute('data-theme', newTheme)
     }
 
     return (
         <ThemeContext.Provider value={{ theme, toggleTheme }}>
-            {children}
+            {!mounted ? (
+                <div style={{ visibility: 'hidden' }}>{children}</div>
+            ) : (
+                children
+            )}
         </ThemeContext.Provider>
     )
 }
 
 export function useTheme() {
-    return useContext(ThemeContext)
+    const context = useContext(ThemeContext)
+    if (context === undefined) {
+        throw new Error('useTheme must be used within a ThemeProvider')
+    }
+    return context
 }

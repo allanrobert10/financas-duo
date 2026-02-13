@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, test, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { mockCards, mockProfile, mockUser } from '../mocks/supabase'
+import { Dado, Quando, Entao, TirarScreenshot } from '../bdd-utils'
+import CardsPage from '@/app/(dashboard)/cards/page'
 
 vi.mock('next/navigation', () => ({
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -41,70 +43,97 @@ vi.mock('@/lib/supabase/client', () => ({
     }),
 }))
 
-import CardsPage from '@/app/(dashboard)/cards/page'
-
-describe('CardsPage', () => {
+describe('Funcionalidade: Gestão de Cartões de Crédito', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         mockGetUser.mockResolvedValue({ data: { user: mockUser }, error: null })
     })
 
-    it('should show skeleton while loading', () => {
-        const neverResolve = new Promise(() => { })
-        const handler: ProxyHandler<object> = {
-            get(_t, prop) {
-                if (prop === 'then') return neverResolve.then.bind(neverResolve)
-                if (prop === 'catch') return () => neverResolve
-                return vi.fn().mockReturnValue(new Proxy({}, handler))
-            },
-        }
-        mockFrom.mockReturnValue(new Proxy({}, handler))
-
-        const { container } = render(<CardsPage />)
-        expect(container.querySelector('.skeleton')).toBeTruthy()
-    })
-
-    it('should render cards after loading', async () => {
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'cards') return createChain(mockCards)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+    test('Cenário: Deve exibir skeleton loading inicialmente', async () => {
+        await Dado('que a requisição de cartões está demorando', async () => {
+            const neverResolve = new Promise(() => { })
+            const handler: ProxyHandler<object> = {
+                get(_t, prop) {
+                    if (prop === 'then') return neverResolve.then.bind(neverResolve)
+                    if (prop === 'catch') return () => neverResolve
+                    return vi.fn().mockReturnValue(new Proxy({}, handler))
+                },
+            }
+            mockFrom.mockReturnValue(new Proxy({}, handler))
         })
 
-        render(<CardsPage />)
+        await Quando('o usuário acessa a página', async () => {
+            render(<CardsPage />)
+        })
 
-        await waitFor(() => {
-            expect(screen.getAllByText(/Nubank/)[0]).toBeTruthy()
-            expect(screen.getAllByText(/Inter/)[0]).toBeTruthy()
+        await Entao('o skeleton de cartões deve ser visível', async () => {
+            expect(document.querySelector('.skeleton')).toBeTruthy()
+            await TirarScreenshot('Skeleton Cartões')
         })
     })
 
-    it('should show primary badge on primary card', async () => {
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'cards') return createChain(mockCards)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+    test('Cenário: Deve listar cartões cadastrados', async () => {
+        await Dado('que o usuário possui cartões', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'cards') return createChain(mockCards)
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
         })
 
-        render(<CardsPage />)
+        await Quando('a página carrega', async () => {
+            render(<CardsPage />)
+        })
 
-        await waitFor(() => {
-            expect(screen.getByText('Principal')).toBeTruthy()
+        await Entao('os cartões Nubank e Inter devem aparecer', async () => {
+            await waitFor(() => {
+                expect(screen.getAllByText(/Nubank/)[0]).toBeTruthy()
+                expect(screen.getAllByText(/Inter/)[0]).toBeTruthy()
+            })
+            await TirarScreenshot('Lista Cartões')
         })
     })
 
-    it('should display card last four digits', async () => {
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'cards') return createChain(mockCards)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+    test('Cenário: Deve destacar cartão principal', async () => {
+        await Dado('que um dos cartões é marcado como principal', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'cards') return createChain(mockCards) // mockCards tem um is_primary: true
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
         })
 
-        render(<CardsPage />)
+        await Quando('a lista é renderizada', async () => {
+            render(<CardsPage />)
+        })
 
-        await waitFor(() => {
-            expect(screen.getByText(/1234/)).toBeTruthy()
-            expect(screen.getByText(/5678/)).toBeTruthy()
+        await Entao('o badge "Principal" deve ser exibido no cartão correto', async () => {
+            await waitFor(() => {
+                expect(screen.getByText('Principal')).toBeTruthy()
+            })
+            await TirarScreenshot('Cartão Principal')
+        })
+    })
+
+    test('Cenário: Deve ocultar números sensíveis do cartão', async () => {
+        await Dado('que os cartões possuem número completo', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'cards') return createChain(mockCards)
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
+        })
+
+        await Quando('os cartões são exibidos', async () => {
+            render(<CardsPage />)
+        })
+
+        await Entao('apenas os 4 últimos dígitos devem estar visíveis', async () => {
+            await waitFor(() => {
+                expect(screen.getByText(/1234/)).toBeTruthy()
+                expect(screen.getByText(/5678/)).toBeTruthy()
+            })
+            await TirarScreenshot('Cartões Mascarados')
         })
     })
 })

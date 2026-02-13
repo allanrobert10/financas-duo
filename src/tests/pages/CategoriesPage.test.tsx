@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, test, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { mockCategories, mockProfile, mockUser } from '../mocks/supabase'
+import { Dado, Quando, Entao, TirarScreenshot } from '../bdd-utils'
+import CategoriesPage from '@/app/(dashboard)/categories/page'
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
@@ -9,7 +11,7 @@ vi.mock('next/navigation', () => ({
     usePathname: () => '/categories',
 }))
 
-// Recursive chainable builder that resolves as promise
+// Mock Supabase Chain
 function createChain(resolvedData: unknown, error: unknown = null) {
     const result = { data: resolvedData, error }
     const promise = Promise.resolve(result)
@@ -20,22 +22,18 @@ function createChain(resolvedData: unknown, error: unknown = null) {
             if (prop === 'catch') return promise.catch.bind(promise)
             if (prop === 'finally') return promise.finally.bind(promise)
             if (prop === Symbol.toStringTag) return 'Promise'
-            // single/maybeSingle returns a promise directly
             if (prop === 'single' || prop === 'maybeSingle') {
                 return vi.fn().mockResolvedValue({
                     data: Array.isArray(resolvedData) ? resolvedData[0] : resolvedData,
                     error,
                 })
             }
-            // Any other method returns the proxy itself (chainable)
             return vi.fn().mockReturnValue(new Proxy({}, handler))
         },
     }
-
     return new Proxy({}, handler)
 }
 
-// Mock supabase client
 const mockFrom = vi.fn()
 const mockGetUser = vi.fn()
 
@@ -49,77 +47,100 @@ vi.mock('@/lib/supabase/client', () => ({
     }),
 }))
 
-import CategoriesPage from '@/app/(dashboard)/categories/page'
-
-describe('CategoriesPage', () => {
+describe('Funcionalidade: Gestão de Categorias', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         mockGetUser.mockResolvedValue({ data: { user: mockUser }, error: null })
     })
 
-    it('should show skeleton while loading', () => {
-        // Never-resolving promise to keep loading
-        const neverResolve = new Promise(() => { })
-        const handler: ProxyHandler<object> = {
-            get(_t, prop) {
-                if (prop === 'then') return neverResolve.then.bind(neverResolve)
-                if (prop === 'catch') return () => neverResolve
-                return vi.fn().mockReturnValue(new Proxy({}, handler))
-            },
-        }
-        mockFrom.mockReturnValue(new Proxy({}, handler))
-
-        const { container } = render(<CategoriesPage />)
-        expect(container.querySelector('.skeleton')).toBeTruthy()
-    })
-
-    it('should render categories after loading', async () => {
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'categories') return createChain(mockCategories)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+    test('Cenário: Deve exibir skeleton loading enquanto carrega', async () => {
+        await Dado('que a requisição de categorias está pendente', async () => {
+            const neverResolve = new Promise(() => { })
+            const handler: ProxyHandler<object> = {
+                get(_t, prop) {
+                    if (prop === 'then') return neverResolve.then.bind(neverResolve)
+                    if (prop === 'catch') return () => neverResolve
+                    return vi.fn().mockReturnValue(new Proxy({}, handler))
+                },
+            }
+            mockFrom.mockReturnValue(new Proxy({}, handler))
         })
 
-        render(<CategoriesPage />)
+        await Quando('o usuário acessa a página de categorias', async () => {
+            render(<CategoriesPage />)
+        })
 
-        await waitFor(() => {
-            expect(screen.getByText('Alimentação')).toBeTruthy()
-            expect(screen.getByText('Transporte')).toBeTruthy()
+        await Entao('o skeleton loading deve ser exibido', async () => {
+            expect(document.querySelector('.skeleton')).toBeTruthy()
+            await TirarScreenshot('Skeleton Loading')
         })
     })
 
-    it('should separate expense and income categories', async () => {
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'categories') return createChain(mockCategories)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+    test('Cenário: Deve renderizar lista de categorias após carregar', async () => {
+        await Dado('que existem categorias cadastradas', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'categories') return createChain(mockCategories)
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
         })
 
-        render(<CategoriesPage />)
+        await Quando('a página carrega os dados', async () => {
+            render(<CategoriesPage />)
+        })
 
-        await waitFor(() => {
-            expect(screen.getAllByText(/Despesas/)[0]).toBeTruthy()
-            expect(screen.getAllByText(/Receitas/)[0]).toBeTruthy()
+        await Entao('as categorias devem estar visíveis na tela', async () => {
+            await waitFor(() => {
+                expect(screen.getAllByText(/Alimentação/)[0]).toBeTruthy()
+                expect(screen.getAllByText(/Transporte/)[0]).toBeTruthy()
+            })
+            await TirarScreenshot('Lista de Categorias')
         })
     })
 
-    it('should open modal when clicking add button', async () => {
+    test('Cenário: Deve separar categorias de Despesas e Receitas', async () => {
+        await Dado('que existem categorias de tipos diferentes', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'categories') return createChain(mockCategories)
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
+        })
+
+        await Quando('a página renderiza as seções', async () => {
+            render(<CategoriesPage />)
+        })
+
+        await Entao('os títulos de seção Despesas e Receitas devem aparecer', async () => {
+            await waitFor(() => {
+                expect(screen.getAllByText(/Despesas/)[0]).toBeTruthy()
+                expect(screen.getAllByText(/Receitas/)[0]).toBeTruthy()
+            })
+            await TirarScreenshot('Seções Separadas')
+        })
+    })
+
+    test('Cenário: Deve abrir modal ao clicar em Nova Categoria', async () => {
         const user = userEvent.setup()
-        mockFrom.mockImplementation((table: string) => {
-            if (table === 'categories') return createChain(mockCategories)
-            if (table === 'profiles') return createChain(mockProfile)
-            return createChain([])
+
+        await Dado('que a página está carregada', async () => {
+            mockFrom.mockImplementation((table: string) => {
+                if (table === 'categories') return createChain(mockCategories)
+                if (table === 'profiles') return createChain(mockProfile)
+                return createChain([])
+            })
+            render(<CategoriesPage />)
+            await waitFor(() => expect(screen.getAllByText(/Alimentação/)[0]).toBeTruthy())
         })
 
-        render(<CategoriesPage />)
-
-        await waitFor(() => {
-            expect(screen.getByText('Alimentação')).toBeTruthy()
+        await Quando('o usuário clica no botão "Nova Categoria"', async () => {
+            const addBtn = screen.getByText(/Nova Categoria/)
+            await user.click(addBtn)
         })
 
-        const addBtn = screen.getByText('Nova Categoria')
-        await user.click(addBtn)
-
-        expect(screen.getByText('Cancelar')).toBeTruthy()
+        await Entao('o modal de cadastro deve ser exibido', async () => {
+            expect(screen.getByText('Cancelar')).toBeTruthy() // Verifica presença do botão cancelar do modal
+            await TirarScreenshot('Modal Aberto')
+        })
     })
 })

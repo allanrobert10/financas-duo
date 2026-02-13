@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest",
-    "test:ci": "vitest run"
+    "test:ci": "vitest run",
+    "report": "allure generate allure-results --clean -o allure-report && allure open allure-report"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
@@ -27,6 +28,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.4",
+    "allure-commandline": "^2.36.0",
+    "allure-js-commons": "^3.4.5",
+    "allure-vitest": "^3.4.5",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "jsdom": "^28.0.0",

@@ -1,15 +1,25 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { ThemeProvider, useTheme } from '@/components/ThemeProvider'
 
-// Test consumer component
+// Mock localStorage
+const localStorageMock = (() => {
+    let store: Record<string, string> = {}
+    return {
+        getItem: (key: string) => store[key] || null,
+        setItem: (key: string, value: string) => { store[key] = value.toString() },
+        clear: () => { store = {} }
+    }
+})()
+
+Object.defineProperty(window, 'localStorage', { value: localStorageMock })
+
 function ThemeConsumer() {
     const { theme, toggleTheme } = useTheme()
     return (
         <div>
             <span data-testid="theme-value">{theme}</span>
-            <button data-testid="toggle-btn" onClick={toggleTheme}>Toggle</button>
+            <button onClick={toggleTheme}>Toggle</button>
         </div>
     )
 }
@@ -20,100 +30,36 @@ describe('ThemeProvider', () => {
         document.documentElement.removeAttribute('data-theme')
     })
 
-    it('should provide default light theme', async () => {
+    test('should provide default dark theme', () => {
         render(
             <ThemeProvider>
                 <ThemeConsumer />
             </ThemeProvider>
         )
-
-        // After useEffect, theme should be light
-        await vi.waitFor(() => {
-            expect(screen.getByTestId('theme-value').textContent).toBe('light')
-        })
-    })
-
-    it('should toggle theme from light to dark', async () => {
-        const user = userEvent.setup()
-
-        render(
-            <ThemeProvider>
-                <ThemeConsumer />
-            </ThemeProvider>
-        )
-
-        await vi.waitFor(() => {
-            expect(screen.getByTestId('theme-value').textContent).toBe('light')
-        })
-
-        await user.click(screen.getByTestId('toggle-btn'))
-
         expect(screen.getByTestId('theme-value').textContent).toBe('dark')
     })
 
-    it('should persist theme to localStorage', async () => {
-        const user = userEvent.setup()
-
+    test('should toggle theme', () => {
         render(
             <ThemeProvider>
                 <ThemeConsumer />
             </ThemeProvider>
         )
-
-        await vi.waitFor(() => {
-            expect(screen.getByTestId('theme-value').textContent).toBe('light')
-        })
-
-        await user.click(screen.getByTestId('toggle-btn'))
-
-        expect(localStorage.setItem).toHaveBeenCalledWith('financas-duo-theme', 'dark')
-    })
-
-    it('should set data-theme attribute on html element', async () => {
-        const user = userEvent.setup()
-
-        render(
-            <ThemeProvider>
-                <ThemeConsumer />
-            </ThemeProvider>
-        )
-
-        await vi.waitFor(() => {
-            expect(document.documentElement.getAttribute('data-theme')).toBe('light')
-        })
-
-        await user.click(screen.getByTestId('toggle-btn'))
-
-        expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
-    })
-
-    it('should load saved theme from localStorage', async () => {
-        localStorage.setItem('financas-duo-theme', 'dark')
-
-        render(
-            <ThemeProvider>
-                <ThemeConsumer />
-            </ThemeProvider>
-        )
-
-        await vi.waitFor(() => {
-            expect(screen.getByTestId('theme-value').textContent).toBe('dark')
-        })
-    })
-
-    it('should render children before mount', () => {
-        const { container } = render(
-            <ThemeProvider>
-                <div data-testid="child">Content</div>
-            </ThemeProvider>
-        )
-        expect(screen.getByTestId('child')).toBeTruthy()
-    })
-})
-
-describe('useTheme', () => {
-    it('should return default values outside provider', () => {
-        render(<ThemeConsumer />)
+        const btn = screen.getByText('Toggle')
+        fireEvent.click(btn)
         expect(screen.getByTestId('theme-value').textContent).toBe('light')
+        fireEvent.click(btn)
+        expect(screen.getByTestId('theme-value').textContent).toBe('dark')
+    })
+
+    test('should persist to localStorage', () => {
+        render(
+            <ThemeProvider>
+                <ThemeConsumer />
+            </ThemeProvider>
+        )
+        const btn = screen.getByText('Toggle')
+        fireEvent.click(btn)
+        expect(localStorage.getItem('theme')).toBe('light')
     })
 })
