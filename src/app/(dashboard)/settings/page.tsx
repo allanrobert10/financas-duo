@@ -422,7 +422,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Two-column grid: Profile + Password side by side */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 24, marginBottom: 24, alignItems: 'start' }}>
+            <div className="grid-2" style={{ marginBottom: 24, alignItems: 'start' }}>
 
                 {/* Profile Section */}
                 <div className="glass-card" style={{ marginBottom: 0 }}>
@@ -767,6 +767,49 @@ export default function SettingsPage() {
                     </div>
                 )}
             </div>
+
+            {/* Danger Zone */}
+            {isOwner && (
+                <div className="glass-card" style={{ marginTop: 24, borderColor: 'var(--color-danger)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+                        <Trash2 size={20} style={{ color: 'var(--color-danger)' }} />
+                        <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-danger)' }}>Zona de Perigo</h2>
+                    </div>
+
+                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 20 }}>
+                        Ações irreversíveis. Tenha cuidado.
+                    </p>
+
+                    <button
+                        className="btn btn-danger"
+                        onClick={async () => {
+                            if (!profile?.household_id) return
+                            const confirmed = confirm('ATENÇÃO: Isso apagará TODAS as transações, contas, categorias e orçamentos do seu Lar.\n\nEssa ação é IRREVERSÍVEL.\n\nTem certeza absoluta?')
+                            if (!confirmed) return
+
+                            const doubleConfirmed = prompt(`Para confirmar, digite "DELETAR" (sem aspas):`)
+                            if (doubleConfirmed !== 'DELETAR') {
+                                alert('Ação cancelada. O texto digitado não confere.')
+                                return
+                            }
+
+                            setSaving(true)
+                            const { error } = await supabase.rpc('reset_household_data', { target_household_id: profile.household_id })
+                            setSaving(false)
+
+                            if (error) {
+                                alert('Erro ao zerar conta: ' + error.message)
+                            } else {
+                                alert('Conta zerada com sucesso. Todos os dados financeiros foram removidos.')
+                                window.location.reload()
+                            }
+                        }}
+                        disabled={saving}
+                    >
+                        {saving ? 'Processando...' : 'ZERAR CONTA (Irreversível)'}
+                    </button>
+                </div>
+            )}
         </div>
     )
 }

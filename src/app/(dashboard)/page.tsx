@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, getMonthName } from '@/lib/utils'
 import type { Profile, Transaction, Category } from '@/types/database'
 import {
-    TrendingUp, Wallet, CreditCard, ArrowUpRight, ArrowDownRight
+    TrendingUp, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight
 } from 'lucide-react'
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -23,8 +23,8 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true)
 
     const now = new Date()
-    const currentMonth = now.getMonth() + 1
-    const currentYear = now.getFullYear()
+    const [month, setMonth] = useState(now.getMonth() + 1)
+    const [year, setYear] = useState(now.getFullYear())
 
     useEffect(() => {
         loadData()
@@ -46,10 +46,21 @@ export default function DashboardPage() {
         setLoading(false)
     }
 
+    function prevMonth() {
+        if (month === 1) { setMonth(12); setYear(y => y - 1) }
+        else setMonth(m => m - 1)
+    }
+    function nextMonth() {
+        if (month === 12) { setMonth(1); setYear(y => y + 1) }
+        else setMonth(m => m + 1)
+    }
+
     // Current month transactions
     const monthTx = transactions.filter(t => {
         const d = new Date(t.date)
-        return d.getMonth() + 1 === currentMonth && d.getFullYear() === currentYear
+        // Fix timezone offset issue by treating date as string YYYY-MM-DD
+        const [tYear, tMonth] = t.date.split('-').map(Number)
+        return tMonth === month && tYear === year
     })
 
     const totalIncome = monthTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
@@ -72,22 +83,39 @@ export default function DashboardPage() {
 
     // Last 6 months bar chart
     const barData = Array.from({ length: 6 }, (_, i) => {
-        const m = new Date(currentYear, currentMonth - 1 - (5 - i), 1)
-        const month = m.getMonth() + 1
-        const year = m.getFullYear()
+        // Create date for (Month - i)
+        // Logic: current selected month is index 0 (rightmost?) or index 5?
+        // Usually charts show "Past -> Present".
+        // Let's show [Month-5, Month-4, ... Month]
+
+        let m = month - (5 - i)
+        let y = year
+
+        while (m <= 0) {
+            m += 12
+            y -= 1
+        }
+
+        // Filter transactions for this specific month m/y
         const mTx = transactions.filter(t => {
-            const d = new Date(t.date)
-            return d.getMonth() + 1 === month && d.getFullYear() === year
+            const [tYear, tMonth] = t.date.split('-').map(Number)
+            return tMonth === m && tYear === y
         })
+
         return {
-            name: getMonthName(month).substring(0, 3),
+            name: getMonthName(m).substring(0, 3),
             receitas: mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
             despesas: mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0),
         }
     })
 
-    // Recent transactions
-    const recentTx = transactions.slice(0, 8)
+    // Recent transactions (Global or Month specific? Usually Dashboard "Recent" is just global recent)
+    // But "Resumo financeiro do casal" implies specific month.
+    // Let's keep recentTx as "Global Recent" for context, but maybe "Account Balance" should be "Account Balance at end of month"?
+    // "Saldo do Mês" is (Income - Expense), which is Cash Flow, not Account Balance.
+
+    // Recent transactions - let's show recent from THIS month
+    const recentTx = monthTx.slice(0, 8)
 
     if (loading) {
         return <SkeletonPage />
@@ -95,14 +123,23 @@ export default function DashboardPage() {
 
     return (
         <div className="fade-in">
-            <div className="page-header">
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
                 <div>
                     <h1 className="page-title">
                         Olá, {profile?.full_name?.split(' ')[0] || 'Usuário'} 👋
                     </h1>
                     <p className="page-subtitle">
-                        {getMonthName(currentMonth)} de {currentYear} — Resumo financeiro do casal
+                        Resumo financeiro do casal
                     </p>
+                </div>
+
+                {/* Date Navigation */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--color-bg-secondary)', padding: '4px 8px', borderRadius: 'var(--radius-full)', border: '1px solid var(--color-border)' }}>
+                    <button className="btn btn-icon btn-ghost btn-sm" onClick={prevMonth}><ChevronLeft size={16} /></button>
+                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 'var(--text-md)', minWidth: 120, textAlign: 'center' }}>
+                        {getMonthName(month)} {year}
+                    </span>
+                    <button className="btn btn-icon btn-ghost btn-sm" onClick={nextMonth}><ChevronRight size={16} /></button>
                 </div>
             </div>
 

@@ -10,6 +10,7 @@ import {
     PieChart, Settings, LogOut, Menu, X, FolderOpen, Sun, Moon
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
+import { Sidebar } from '@/components/Sidebar'
 
 const navItems = [
     { label: 'Visão Geral', section: 'principal' },
@@ -83,57 +84,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 onClick={() => setSidebarOpen(false)}
             />
 
-            <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
-                <div className="sidebar-logo">
-                    <h1>FinançasDuo</h1>
-                    <span>Finanças inteligentes</span>
-                </div>
-
-                <nav className="sidebar-nav">
-                    {navItems.map((item, i) => {
-                        if ('section' in item) {
-                            return <div key={i} className="sidebar-section-label">{item.label}</div>
-                        }
-                        const Icon = item.icon!
-                        const isActive = pathname === item.href
-                        return (
-                            <Link
-                                key={item.href}
-                                href={item.href!}
-                                className={`nav-item${isActive ? ' active' : ''}`}
-                                onClick={() => setSidebarOpen(false)}
-                            >
-                                <Icon size={18} />
-                                {item.label}
-                            </Link>
-                        )
-                    })}
-                </nav>
-
-                <div style={{
-                    padding: '8px 16px', borderTop: '1px solid var(--color-border)',
-                }}>
-                    <button
-                        className="nav-item"
-                        onClick={toggleTheme}
-                        style={{ width: '100%', border: 'none', cursor: 'pointer', background: 'none' }}
-                    >
-                        {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-                        {theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
-                    </button>
-                </div>
-
-                <div className="sidebar-user">
-                    <div className="sidebar-user-avatar">{initials}</div>
-                    <div className="sidebar-user-info">
-                        <div className="sidebar-user-name">{profile?.full_name || 'Carregando...'}</div>
-                        <div className="sidebar-user-email">{profile?.email || ''}</div>
-                    </div>
-                    <button className="btn btn-icon btn-ghost" onClick={handleLogout} title="Sair">
-                        <LogOut size={16} />
-                    </button>
-                </div>
-            </aside>
+            <Sidebar mobileOpen={sidebarOpen} setMobileOpen={setSidebarOpen} />
 
             <main className="main-content">
                 {children}

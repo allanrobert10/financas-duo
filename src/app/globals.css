@@ -47,6 +47,9 @@
   --color-info: #3B82F6;
   --color-info-bg: rgba(59, 130, 246, 0.08);
 
+  --color-black-card: #0F172A;
+  /* Slate 900 */
+
   /* === Shadows (Light) === */
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 0 0 1px var(--color-border);
   --shadow-glass: 0 4px 16px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
@@ -92,6 +95,8 @@
 
   /* === Layout === */
   --sidebar-width: 260px;
+  --sidebar-collapsed-width: 72px;
+  /* New variable */
   --topbar-height: 64px;
 }
 
