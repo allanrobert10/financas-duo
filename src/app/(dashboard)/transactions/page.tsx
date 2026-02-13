@@ -229,7 +229,7 @@ export default function TransactionsPage() {
                                         <td>{formatDate(t.date)}</td>
                                         <td>
                                             <div style={{ fontWeight: 500 }}>{t.description}</div>
-                                            {(t.installments_id || (t.is_recurring && t.recurrence_type === 'installment')) && (
+                                            {(t.installment_id || (t.is_recurring && t.recurrence_type === 'installment')) && (
                                                 <span className="badge badge-outline" style={{ fontSize: 10, padding: '2px 6px', marginTop: 4 }}>
                                                     Parcelado
                                                 </span>

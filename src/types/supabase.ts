@@ -251,6 +251,7 @@ export type Database = {
                     description: string
                     household_id: string
                     id: string
+                    installment_id: string | null
                     is_recurring: boolean | null
                     notes: string | null
                     recurrence_type: string | null
@@ -267,6 +268,7 @@ export type Database = {
                     description: string
                     household_id: string
                     id?: string
+                    installment_id?: string | null
                     is_recurring?: boolean | null
                     notes?: string | null
                     recurrence_type?: string | null
@@ -283,6 +285,7 @@ export type Database = {
                     description?: string
                     household_id?: string
                     id?: string
+                    installment_id?: string | null
                     is_recurring?: boolean | null
                     notes?: string | null
                     recurrence_type?: string | null
