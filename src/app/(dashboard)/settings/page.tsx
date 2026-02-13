@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { Profile } from '@/types/database'
 import { User, Save, Check, Mail, UserPlus, Crown, X, Copy, Users, Lock, Eye, EyeOff, Trash2, FileSpreadsheet, Upload, Download } from 'lucide-react'
 import { generateTemplate, exportTransactions, parseImport, type TransactionImportData } from '@/utils/excel'
+import { getAppUrl } from '@/lib/url'
 
 const PASSWORD_RULES = [
     { key: 'length', label: 'Mínimo 8 caracteres', test: (p: string) => p.length >= 8 },
@@ -155,7 +156,7 @@ export default function SettingsPage() {
         }
 
         if (data) {
-            const inviteUrl = `${window.location.origin}/accept-invite?token=${data.token}`
+            const inviteUrl = `${getAppUrl()}/accept-invite?token=${data.token}`
             setInviteMsg({
                 type: 'success',
                 text: `Convite criado! Compartilhe este link com ${inviteEmail}:`,

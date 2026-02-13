@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Eye, EyeOff, Check, X } from 'lucide-react'
+import { getAppUrl } from '@/lib/url'
 
 const PASSWORD_RULES = [
     { key: 'length', label: 'Mínimo 8 caracteres', test: (p: string) => p.length >= 8 },
@@ -60,6 +61,7 @@ function RegisterContent() {
             password,
             options: {
                 data: { full_name: fullName },
+                emailRedirectTo: `${getAppUrl()}/auth/callback`,
             },
         })
 
