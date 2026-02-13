@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useMemo, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Eye, EyeOff, Check, X } from 'lucide-react'
@@ -22,7 +22,7 @@ function getStrength(score: number): { label: string; color: string; percent: nu
     return { label: 'Muito forte', color: '#059669', percent: 100 }
 }
 
-export default function RegisterPage() {
+function RegisterContent() {
     const [fullName, setFullName] = useState('')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
@@ -30,7 +30,11 @@ export default function RegisterPage() {
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
     const router = useRouter()
+    const searchParams = useSearchParams()
     const supabase = createClient()
+
+    // Captura o redirecionamento (convite)
+    const redirectUrl = searchParams.get('redirect')
 
     const passedRules = useMemo(() =>
         PASSWORD_RULES.map(r => ({ ...r, passed: r.test(password) })),
@@ -65,9 +69,14 @@ export default function RegisterPage() {
             return
         }
 
-        router.push('/')
+        // Se houver um redirecionamento (ex: convite), vai para ele.
+        router.push(redirectUrl || '/')
         router.refresh()
     }
+
+    const loginLink = redirectUrl
+        ? `/login?redirect=${encodeURIComponent(redirectUrl)}`
+        : '/login'
 
     return (
         <div className="auth-page">
@@ -177,10 +186,18 @@ export default function RegisterPage() {
                     </form>
 
                     <div className="auth-footer">
-                        Já tem conta? <Link href="/login">Fazer login</Link>
+                        Já tem conta? <Link href={loginLink}>Fazer login</Link>
                     </div>
                 </div>
             </div>
         </div>
+    )
+}
+
+export default function RegisterPage() {
+    return (
+        <Suspense fallback={<div className="auth-page"><div className="auth-container"><h1 className="auth-logo">FinançasDuo</h1><div className="auth-card">Carregando...</div></div></div>}>
+            <RegisterContent />
+        </Suspense>
     )
 }

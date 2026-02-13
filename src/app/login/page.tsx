@@ -1,17 +1,21 @@
 'use client'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 
-export default function LoginPage() {
+function LoginContent() {
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [error, setError] = useState('')
     const [loading, setLoading] = useState(false)
     const router = useRouter()
+    const searchParams = useSearchParams()
     const supabase = createClient()
+
+    // Captura o parâmetro redirect da URL (ex: /accept-invite?token=...)
+    const redirectUrl = searchParams.get('redirect')
 
     async function handleLogin(e: React.FormEvent) {
         e.preventDefault()
@@ -28,9 +32,14 @@ export default function LoginPage() {
             return
         }
 
-        router.push('/')
+        // Se houver um redirecionamento (ex: convite), vai para ele. Senão, vai para dashboard.
+        router.push(redirectUrl || '/')
         router.refresh()
     }
+
+    const registerLink = redirectUrl
+        ? `/register?redirect=${encodeURIComponent(redirectUrl)}`
+        : '/register'
 
     return (
         <div className="auth-page">
@@ -76,10 +85,18 @@ export default function LoginPage() {
                     </form>
 
                     <div className="auth-footer">
-                        Não tem conta? <Link href="/register">Criar conta</Link>
+                        Não tem conta? <Link href={registerLink}>Criar conta</Link>
                     </div>
                 </div>
             </div>
         </div>
+    )
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={<div className="auth-page"><div className="auth-container"><h1 className="auth-logo">FinançasDuo</h1><div className="auth-card">Carregando...</div></div></div>}>
+            <LoginContent />
+        </Suspense>
     )
 }
