@@ -21,7 +21,7 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState<'overview' | 'budgets'>('overview')
     const [budgets, setBudgets] = useState<Budget[]>([])
-    const [barPeriod, setBarPeriod] = useState(6)
+    const [barPeriod, setBarPeriod] = useState<number | 'today'>(6)
 
     // Budget specific states
     const [showBudgetModal, setShowBudgetModal] = useState(false)
