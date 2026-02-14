@@ -16,7 +16,17 @@ const BRANDS = [
     { value: 'other', label: 'Outra' },
 ]
 
-const CARD_COLORS = ['#6366F1', '#10B981', '#EF4444', '#F59E0B', '#3B82F6', '#EC4899', '#8B5CF6', '#14B8A6']
+const CARD_COLORS = [
+    '#6366F1', '#10B981', '#EF4444', '#F59E0B', '#3B82F6', '#EC4899', '#8B5CF6', '#14B8A6',
+    '#000000', // Black Card
+    '#1A1A1A', // Graphite
+    '#D4AF37', // Gold
+    '#A1A1AA', // Silver
+    '#581C87', // Deep Purple
+    '#064E3B', // Deep Green
+    '#1E3A8A', // Deep Blue
+    '#7F1D1D'  // Dark Red
+]
 
 export default function CardsPage() {
     const supabase = createClient()
@@ -136,7 +146,22 @@ export default function CardsPage() {
                 <div className="stagger-container" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
                     {cards.map(card => (
                         <div key={card.id} className="stagger-item" style={{ position: 'relative' }}>
-                            <div className="credit-card-visual" style={{ background: `linear-gradient(135deg, ${card.color || '#6366F1'}, ${card.color || '#6366F1'}dd)` }}>
+                            <div className="credit-card-visual" style={{
+                                background: card.color === '#000000' || card.color === '#1A1A1A'
+                                    ? 'linear-gradient(135deg, #1f1f1f 0%, #000000 100%)'
+                                    : `linear-gradient(135deg, ${card.color || '#6366F1'} 0%, ${card.color || '#6366F1'}dd 100%)`,
+                                border: card.color === '#000000' || card.color === '#1A1A1A' ? '1px solid rgba(255,255,255,0.1)' : 'none',
+                                boxShadow: card.color === '#000000' || card.color === '#1A1A1A' ? '0 10px 30px rgba(0,0,0,0.5), inset 0 0 10px rgba(255,255,255,0.05)' : 'none'
+                            }}>
+                                {card.color === '#000000' && (
+                                    <div style={{
+                                        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                                        background: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent)',
+                                        animation: 'shine 3s infinite',
+                                        pointerEvents: 'none',
+                                        zIndex: 1
+                                    }} />
+                                )}
                                 {card.is_primary && <div className="credit-card-primary-badge"><Star size={10} /> Principal</div>}
                                 <div>
                                     <div className="credit-card-brand">{card.brand?.toUpperCase() || 'CARTÃO'}</div>
@@ -243,12 +268,14 @@ export default function CardsPage() {
                                 </div>
                                 <div className="input-group">
                                     <label className="input-label">Cor do Cartão</label>
-                                    <div style={{ display: 'flex', gap: 8 }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 8 }}>
                                         {CARD_COLORS.map(c => (
                                             <button key={c} type="button"
                                                 style={{
-                                                    width: 32, height: 32, borderRadius: '50%', background: c, border: form.color === c ? '3px solid #fff' : '2px solid transparent',
+                                                    width: '100%', aspectRatio: '1/1', borderRadius: '50%', background: c,
+                                                    border: form.color === c ? (c === '#000000' ? '2px solid var(--color-accent)' : '3px solid #fff') : '2px solid transparent',
                                                     cursor: 'pointer', transition: 'all 0.15s',
+                                                    boxShadow: form.color === c ? '0 0 10px rgba(0,0,0,0.2)' : 'none'
                                                 }}
                                                 onClick={() => setForm(f => ({ ...f, color: c }))}
                                             />

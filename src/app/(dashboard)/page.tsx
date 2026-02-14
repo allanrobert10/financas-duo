@@ -8,8 +8,8 @@ import {
     PieChart as RePieChart, Pie, Cell
 } from 'recharts'
 import { SkeletonPage, SkeletonList } from '@/components/Skeleton'
-import { Plus, Pencil, Trash2, PieChart, X, TrendingUp, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight } from 'lucide-react'
-import type { Profile, Transaction, Category, Budget } from '@/types/database'
+import { Plus, Pencil, Trash2, PieChart, X, TrendingUp, Wallet, CreditCard, ArrowUpRight, ArrowDownRight, ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import type { Profile, Transaction, Category, Budget, Card } from '@/types/database'
 
 const CHART_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#14B8A6']
 
@@ -21,7 +21,9 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true)
     const [activeTab, setActiveTab] = useState<'overview' | 'budgets'>('overview')
     const [budgets, setBudgets] = useState<Budget[]>([])
+    const [cards, setCards] = useState<Card[]>([])
     const [barPeriod, setBarPeriod] = useState<number | 'today'>(6)
+    const [searchTermRecent, setSearchTermRecent] = useState('')
 
     // Budget specific states
     const [showBudgetModal, setShowBudgetModal] = useState(false)
@@ -41,17 +43,28 @@ export default function DashboardPage() {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
 
-        const [profileRes, txRes, catRes, budgetRes] = await Promise.all([
+        const [profileRes, catRes, budgetRes, cardRes] = await Promise.all([
             supabase.from('profiles').select('*').eq('id', user.id).single(),
-            supabase.from('transactions').select('*').order('date', { ascending: false }),
             supabase.from('categories').select('*'),
-            supabase.from('budgets').select('*').eq('month', month).eq('year', year)
+            supabase.from('budgets').select('*').eq('month', month).eq('year', year),
+            supabase.from('cards').select('*')
         ])
 
-        if (profileRes.data) setProfile(profileRes.data)
-        if (txRes.data) setTransactions(txRes.data)
+        if (profileRes.data) {
+            setProfile(profileRes.data)
+
+            // Fetch transactions ONLY for this household
+            const { data: txData } = await supabase
+                .from('transactions')
+                .select('*')
+                .eq('household_id', profileRes.data.household_id)
+                .order('date', { ascending: false })
+
+            if (txData) setTransactions(txData)
+        }
         if (catRes.data) setCategories(catRes.data)
         if (budgetRes.data) setBudgets(budgetRes.data)
+        if (cardRes.data) setCards(cardRes.data)
         setLoading(false)
     }
 
@@ -84,23 +97,88 @@ export default function DashboardPage() {
             ? parseFloat(budgetForm.amount.replace(/\./g, '').replace(',', '.'))
             : budgetForm.amount
 
-        const payload = {
-            category_id: budgetForm.category_id,
-            amount: amountValue || 0,
-            month,
-            year,
-            household_id: profile?.household_id
+        if (!profile?.household_id) {
+            console.error('Perfil ou Household ID não encontrado')
+            setSavingBudget(false)
+            return
         }
 
-        if (editingBudget) {
-            await supabase.from('budgets').update(payload).eq('id', editingBudget.id)
-        } else {
-            await supabase.from('budgets').insert(payload)
-        }
+        try {
+            if (editingBudget) {
+                // 1. Update existing and all future related budgets
+                const { error } = await supabase
+                    .from('budgets')
+                    .update({ amount: amountValue || 0 })
+                    .eq('household_id', profile.household_id)
+                    .eq('category_id', budgetForm.category_id)
+                    .or(`year.gt.${year},and(year.eq.${year},month.gte.${month})`)
 
-        setSavingBudget(false)
-        setShowBudgetModal(false)
-        loadBudgets()
+                if (error) throw error
+            } else {
+                // 2. Creation logic: Create for current + 23 months (Total 24)
+                // First, check what already exists to avoid 409 errors
+                const { data: existing } = await supabase
+                    .from('budgets')
+                    .select('month, year')
+                    .eq('household_id', profile.household_id)
+                    .eq('category_id', budgetForm.category_id)
+
+                const existingMap = new Set(existing?.map(e => `${e.year}-${e.month}`))
+
+                const toInsert = []
+                const toUpdate = []
+
+                for (let i = 0; i < 24; i++) {
+                    let m = month + i
+                    let y = year
+                    while (m > 12) {
+                        m -= 12
+                        y += 1
+                    }
+
+                    const key = `${y}-${m}`
+                    const budgetData = {
+                        category_id: budgetForm.category_id,
+                        amount: amountValue || 0,
+                        month: m,
+                        year: y,
+                        household_id: profile.household_id
+                    }
+
+                    if (existingMap.has(key)) {
+                        toUpdate.push(budgetData)
+                    } else {
+                        toInsert.push(budgetData)
+                    }
+                }
+
+                // Execute inserts
+                if (toInsert.length > 0) {
+                    const { error: insErr } = await supabase.from('budgets').insert(toInsert)
+                    if (insErr) throw insErr
+                }
+
+                // Execute updates (unfortunately we must update individually or by month/year groups if we don't have IDs)
+                if (toUpdate.length > 0) {
+                    // Update all future ones for this category with the same amount
+                    const { error: updErr } = await supabase
+                        .from('budgets')
+                        .update({ amount: amountValue || 0 })
+                        .eq('household_id', profile.household_id)
+                        .eq('category_id', budgetForm.category_id)
+                        .or(`year.gt.${year},and(year.eq.${year},month.gte.${month})`)
+                    if (updErr) throw updErr
+                }
+            }
+
+            setShowBudgetModal(false)
+            loadBudgets()
+        } catch (error: any) {
+            console.error('Erro ao salvar orçamento:', error)
+            alert('Não foi possível salvar o orçamento. Verifique o console para mais detalhes.')
+        } finally {
+            setSavingBudget(false)
+        }
     }
 
     async function handleDeleteBudget(id: string) {
@@ -118,16 +196,25 @@ export default function DashboardPage() {
         else setMonth(m => m + 1)
     }
 
-    // Current month transactions
+    // Current month transactions (Respecting credit card cycles)
     const monthTx = transactions.filter(t => {
-        const d = new Date(t.date)
-        // Fix timezone offset issue by treating date as string YYYY-MM-DD
-        const [tYear, tMonth] = t.date.split('-').map(Number)
-        return tMonth === month && tYear === year
+        if (t.card_id) {
+            const card = cards.find(c => c.id === t.card_id)
+            if (!card) return false
+            const closingDay = card.closing_day || 31
+            const periodEnd = new Date(year, month - 1, closingDay)
+            const periodStart = new Date(year, month - 2, closingDay + 1)
+            const transactionDate = new Date(t.date + 'T00:00:00')
+            return transactionDate >= periodStart && transactionDate <= periodEnd
+        } else {
+            // Cash transactions follow calendar month
+            const [tYear, tMonth] = t.date.split('-').map(Number)
+            return tMonth === month && tYear === year
+        }
     })
 
-    const totalIncome = monthTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0)
-    const totalExpense = monthTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0)
+    const totalIncome = monthTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+    const totalExpense = monthTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
     const balance = totalIncome - totalExpense
 
     // Expenses by category for pie chart
@@ -171,18 +258,14 @@ export default function DashboardPage() {
 
         return {
             name: getMonthName(m).substring(0, 3),
-            receitas: mTx.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
-            despesas: mTx.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0),
+            receitas: mTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0),
+            despesas: mTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0),
         }
     })
 
-    // Recent transactions (Global or Month specific? Usually Dashboard "Recent" is just global recent)
-    // But "Resumo financeiro do casal" implies specific month.
-    // Let's keep recentTx as "Global Recent" for context, but maybe "Account Balance" should be "Account Balance at end of month"?
-    // "Saldo do Mês" is (Income - Expense), which is Cash Flow, not Account Balance.
-
-    // Recent transactions - let's show recent from THIS month
-    const recentTx = monthTx.slice(0, 8)
+    const recentTx = transactions
+        .filter(t => t.description.toLowerCase().includes(searchTermRecent.toLowerCase()))
+        .slice(0, 8)
 
     if (loading) {
         return <SkeletonPage />
@@ -420,9 +503,29 @@ export default function DashboardPage() {
 
                     {/* Recent Transactions */}
                     <div className="chart-card stagger-item" style={{ marginTop: 24, padding: 0, overflow: 'hidden' }}>
-                        <div style={{ padding: '24px 24px 12px' }}>
-                            <div className="chart-card-title">Transações Recentes</div>
-                            <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Últimas movimentações da sua conta</p>
+                        <div style={{ padding: '24px 24px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                                <div className="chart-card-title">Transações Recentes</div>
+                                <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Últimas movimentações da sua conta</p>
+                            </div>
+                            <div style={{ position: 'relative', width: 280 }}>
+                                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar..."
+                                    value={searchTermRecent}
+                                    onChange={(e) => setSearchTermRecent(e.target.value)}
+                                    style={{
+                                        width: '100%',
+                                        padding: '8px 10px 8px 32px',
+                                        borderRadius: 10,
+                                        background: 'var(--color-bg-tertiary)',
+                                        border: '1px solid var(--color-border)',
+                                        fontSize: 13,
+                                        color: 'var(--color-text-primary)'
+                                    }}
+                                />
+                            </div>
                         </div>
                         {recentTx.length > 0 ? (
                             <table className="data-table" style={{ marginTop: 12 }}>

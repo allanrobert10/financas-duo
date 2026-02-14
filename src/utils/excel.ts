@@ -6,8 +6,23 @@ export interface TransactionImportData {
     amount: number;
     type: 'income' | 'expense';
     category: string;
-    account: string;
+    paymentMethod: 'conta' | 'cartão';
+    paymentName: string;
     notes?: string;
+    isInstallment?: boolean;
+    tags?: string; // Comma separated tags
+}
+
+export interface CategoryImportData {
+    name: string;
+    type: 'income' | 'expense';
+    icon?: string;
+    color?: string;
+}
+
+export interface TagImportData {
+    name: string;
+    color?: string;
 }
 
 const HEADERS = [
@@ -16,16 +31,30 @@ const HEADERS = [
     'Valor',
     'Tipo (Receita/Despesa)',
     'Categoria',
-    'Conta',
-    'Observações'
+    'Meio (Conta/Cartão)',
+    'Nome (Conta/Cartão)',
+    'Observações',
+    'Tags (Separe por vírgula)'
+];
+
+const CATEGORY_HEADERS = [
+    'Nome',
+    'Tipo (Receita/Despesa)',
+    'Ícone (opcional)',
+    'Cor (Hexadecimal, opcional)'
+];
+
+const TAG_HEADERS = [
+    'Nome',
+    'Cor (Hexadecimal, opcional)'
 ];
 
 export const generateTemplate = () => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([
         HEADERS,
-        ['01/01/2024', 'Exemplo de Receita', 5000, 'Receita', 'Salário', 'Banco X', 'Salário mensal'],
-        ['05/01/2024', 'Exemplo de Despesa', 150.50, 'Despesa', 'Alimentação', 'Cartão Y', 'Compras da semana']
+        ['01/01/2026', 'Exemplo de Receita', 5000, 'Receita', 'Salário', 'Conta', 'Banco Principal', 'Salário mensal', 'Trabalho, Mensal'],
+        ['05/01/2026', 'Exemplo de Despesa 01/10', 150.50, 'Despesa', 'Alimentação', 'Cartão', 'Nubank Platinum', 'Compras da semana', 'Mercado, Casa']
     ]);
 
     // Adjust column widths
@@ -35,27 +64,67 @@ export const generateTemplate = () => {
         { wch: 15 }, // Valor
         { wch: 20 }, // Tipo
         { wch: 20 }, // Categoria
-        { wch: 20 }, // Conta
-        { wch: 30 }  // Observações
+        { wch: 20 }, // Meio
+        { wch: 20 }, // Nome
+        { wch: 30 }, // Observações
+        { wch: 30 }  // Tags
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, 'Modelo');
     XLSX.writeFile(wb, 'modelo_importacao_financas.xlsx');
 };
 
+export const generateCategoryTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+        CATEGORY_HEADERS,
+        ['Alimentação', 'Despesa', 'utensils', '#EF4444'],
+        ['Salário', 'Receita', 'trending-up', '#10B981'],
+        ['Transporte', 'Despesa', 'car', '#3B82F6']
+    ]);
+
+    ws['!cols'] = [
+        { wch: 25 }, // Nome
+        { wch: 25 }, // Tipo
+        { wch: 20 }, // Ícone
+        { wch: 30 }  // Cor
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Categorias');
+    XLSX.writeFile(wb, 'modelo_importacao_categorias.xlsx');
+};
+
+export const generateTagTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+        TAG_HEADERS,
+        ['Viagem', '#8B5CF6'],
+        ['Saúde', '#EF4444'],
+        ['Educação', '#3B82F6']
+    ]);
+
+    ws['!cols'] = [
+        { wch: 25 }, // Nome
+        { wch: 30 }  // Cor
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Tags');
+    XLSX.writeFile(wb, 'modelo_importacao_tags.xlsx');
+};
+
 export const parseImport = async (file: File): Promise<TransactionImportData[]> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
-        
+
         reader.onload = (e) => {
             try {
                 const data = e.target?.result;
                 const workbook = XLSX.read(data, { type: 'binary' });
                 const sheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[sheetName];
-                
+
                 const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-                
+
                 // Remove header row
                 if (jsonData.length > 0) jsonData.shift();
 
@@ -67,31 +136,40 @@ export const parseImport = async (file: File): Promise<TransactionImportData[]> 
                         const amount = parseFloat(row[2]);
                         const typeRaw = row[3]?.toString().toLowerCase().trim();
                         const category = row[4];
-                        const account = row[5];
-                        const notes = row[6];
+                        const payMethodRaw = row[5]?.toString().toLowerCase().trim();
+                        const payName = row[6];
+                        const notes = row[7];
+                        const tags = row[8]?.toString() || '';
 
                         // Validate required fields
-                        if (!dateRaw || !description || isNaN(amount) || !typeRaw || !category || !account) {
-                           return null;
+                        if (!dateRaw || !description || isNaN(amount) || !typeRaw || !category || !payMethodRaw || !payName) {
+                            return null;
                         }
 
                         // Normalize Type
                         let type: 'income' | 'expense' = 'expense';
                         if (typeRaw.includes('receita') || typeRaw === 'income') type = 'income';
 
-                         // Handle Excel Date Serial Number or String
-                         let date = dateRaw;
-                         if (typeof dateRaw === 'number') {
-                             const dateObj = new Date(Math.round((dateRaw - 25569) * 86400 * 1000));
-                             // Adjust for timezone offset if necessary or format as YYYY-MM-DD
-                             date = dateObj.toISOString().split('T')[0];
-                         } else if (typeof dateRaw === 'string') {
-                             // Expecting DD/MM/AAAA
-                             const parts = dateRaw.split('/');
-                             if (parts.length === 3) {
-                                 date = `${parts[2]}-${parts[1]}-${parts[0]}`;
-                             }
-                         }
+                        // Normalize Payment Method
+                        let paymentMethod: 'conta' | 'cartão' = 'conta';
+                        if (payMethodRaw.includes('cartão') || payMethodRaw === 'card' || payMethodRaw === 'cartao') paymentMethod = 'cartão';
+
+                        // Detect Installments (Pattern: NN/MM at the end of description)
+                        const installmentRegex = /(\d{1,2}\/\d{1,2})$/;
+                        const isInstallment = installmentRegex.test(description.toString().trim());
+
+                        // Handle Excel Date Serial Number or String
+                        let date = dateRaw;
+                        if (typeof dateRaw === 'number') {
+                            const dateObj = new Date(Math.round((dateRaw - 25569) * 86400 * 1000));
+                            date = dateObj.toISOString().split('T')[0];
+                        } else if (typeof dateRaw === 'string') {
+                            // Expecting DD/MM/AAAA
+                            const parts = dateRaw.split('/');
+                            if (parts.length === 3) {
+                                date = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                            }
+                        }
 
                         return {
                             date,
@@ -99,13 +177,99 @@ export const parseImport = async (file: File): Promise<TransactionImportData[]> 
                             amount,
                             type,
                             category,
-                            account,
-                            notes
+                            paymentMethod,
+                            paymentName: payName,
+                            notes,
+                            isInstallment,
+                            tags
                         };
                     })
                     .filter(item => item !== null) as TransactionImportData[];
 
                 resolve(transactions);
+            } catch (error) {
+                reject(error);
+            }
+        };
+
+        reader.onerror = (error) => reject(error);
+        reader.readAsBinaryString(file);
+    });
+};
+
+export const parseCategoryImport = async (file: File): Promise<CategoryImportData[]> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            try {
+                const data = e.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                // Remove header row
+                if (jsonData.length > 0) jsonData.shift();
+
+                const categories: CategoryImportData[] = jsonData
+                    .filter((row: any) => row.length > 0 && row[0])
+                    .map((row: any) => {
+                        const name = row[0]?.toString().trim();
+                        const typeRaw = row[1]?.toString().toLowerCase().trim();
+                        const icon = row[2]?.toString().trim() || 'tag';
+                        const color = row[3]?.toString().trim() || '#10B981';
+
+                        if (!name || !typeRaw) return null;
+
+                        let type: 'income' | 'expense' = 'expense';
+                        if (typeRaw.includes('receita') || typeRaw === 'income') type = 'income';
+
+                        return { name, type, icon, color };
+                    })
+                    .filter(item => item !== null) as CategoryImportData[];
+
+                resolve(categories);
+            } catch (error) {
+                reject(error);
+            }
+        };
+
+        reader.onerror = (error) => reject(error);
+        reader.readAsBinaryString(file);
+    });
+};
+
+export const parseTagImport = async (file: File): Promise<TagImportData[]> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            try {
+                const data = e.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                // Remove header row
+                if (jsonData.length > 0) jsonData.shift();
+
+                const tags: TagImportData[] = jsonData
+                    .filter((row: any) => row.length > 0 && row[0])
+                    .map((row: any) => {
+                        const name = row[0]?.toString().trim();
+                        const color = row[1]?.toString().trim() || '#8B5CF6';
+
+                        if (!name) return null;
+
+                        return { name, color };
+                    })
+                    .filter(item => item !== null) as TagImportData[];
+
+                resolve(tags);
             } catch (error) {
                 reject(error);
             }
@@ -123,8 +287,10 @@ export const exportTransactions = (transactions: any[]) => {
         t.amount,
         t.type === 'income' ? 'Receita' : 'Despesa',
         t.category?.name || 'Sem Categoria',
-        t.account?.name || 'Sem Conta',
-        t.notes || ''
+        t.accounts ? 'Conta' : 'Cartão',
+        t.accounts?.name || t.cards?.name || 'Não definido',
+        t.notes || '',
+        t.transaction_tags?.map((tt: any) => tt.tags?.name).join(', ') || ''
     ]);
 
     const wb = XLSX.utils.book_new();
@@ -134,6 +300,7 @@ export const exportTransactions = (transactions: any[]) => {
         { wch: 15 },
         { wch: 30 },
         { wch: 15 },
+        { wch: 20 },
         { wch: 20 },
         { wch: 20 },
         { wch: 20 },

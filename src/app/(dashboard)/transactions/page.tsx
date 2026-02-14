@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, getMonthName } from '@/lib/utils'
 import type { Transaction, Category, Account, Card, Tag } from '@/types/database'
-import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet } from 'lucide-react'
+import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet, ChevronDown, Check, ChevronLeft, ChevronRight, Calendar, Search } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
 
 export default function TransactionsPage() {
@@ -18,18 +18,38 @@ export default function TransactionsPage() {
     const [editing, setEditing] = useState<Transaction | null>(null)
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
+    const [showTagsDropdown, setShowTagsDropdown] = useState(false)
+    const tagsRef = useRef<HTMLDivElement>(null)
+    const [viewMode, setViewMode] = useState<'list' | 'invoices'>('list')
+    const [selectedCardId, setSelectedCardId] = useState<string>('')
+    const [invoiceMonth, setInvoiceMonth] = useState(new Date().getMonth() + 1)
+    const [invoiceYear, setInvoiceYear] = useState(new Date().getFullYear())
     const [householdId, setHouseholdId] = useState('')
     const [userId, setUserId] = useState('')
     const [filterType, setFilterType] = useState<string>('all')
+    const [selectedIds, setSelectedIds] = useState<string[]>([])
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+    const [searchTerm, setSearchTerm] = useState('')
 
     const [form, setForm] = useState({
         description: '', amount: '', type: 'expense' as string,
         category_id: '', account_id: '', card_id: '', date: new Date().toISOString().split('T')[0],
         notes: '', is_recurring: false, recurrence_type: '' as string,
         installments_count: 2,
+        tag_ids: [] as string[],
     })
 
     useEffect(() => { loadAll() }, [])
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (tagsRef.current && !tagsRef.current.contains(event.target as Node)) {
+                setShowTagsDropdown(false)
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside)
+        return () => document.removeEventListener("mousedown", handleClickOutside)
+    }, [])
 
     async function loadAll() {
         const { data: { user } } = await supabase.auth.getUser()
@@ -40,7 +60,7 @@ export default function TransactionsPage() {
         if (profile?.household_id) setHouseholdId(profile.household_id)
 
         const [txR, catR, accR, cardR, tagR] = await Promise.all([
-            supabase.from('transactions').select('*').order('date', { ascending: false }),
+            supabase.from('transactions').select('*, transaction_tags(tag_id)').order('date', { ascending: false }).order('created_at', { ascending: false }),
             supabase.from('categories').select('*'),
             supabase.from('accounts').select('*').eq('is_active', true),
             supabase.from('cards').select('*').eq('is_active', true),
@@ -50,7 +70,13 @@ export default function TransactionsPage() {
         if (txR.data) setTransactions(txR.data)
         if (catR.data) setCategories(catR.data)
         if (accR.data) setAccounts(accR.data)
-        if (cardR.data) setCards(cardR.data)
+        if (cardR.data) {
+            setCards(cardR.data)
+            if (cardR.data.length > 0 && !selectedCardId) {
+                const primary = cardR.data.find(c => c.is_primary) || cardR.data[0]
+                setSelectedCardId(primary.id)
+            }
+        }
         if (tagR.data) setTags(tagR.data)
         setLoading(false)
     }
@@ -59,8 +85,13 @@ export default function TransactionsPage() {
         setEditing(null)
         setForm({
             description: '', amount: '', type: 'expense', category_id: '',
-            account_id: '', card_id: '', date: new Date().toISOString().split('T')[0],
+            account_id: '', card_id: '',
+            date: (() => {
+                const d = new Date()
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+            })(),
             notes: '', is_recurring: false, recurrence_type: '', installments_count: 2,
+            tag_ids: [],
         })
         setShowModal(true)
     }
@@ -72,7 +103,8 @@ export default function TransactionsPage() {
             category_id: tx.category_id || '', account_id: tx.account_id || '',
             card_id: tx.card_id || '', date: tx.date, notes: tx.notes || '',
             is_recurring: tx.is_recurring || false, recurrence_type: tx.recurrence_type || '',
-            installments_count: 2, // Edit mode logic for installments is complex, defaulting for now
+            installments_count: 2,
+            tag_ids: (tx as any).transaction_tags?.map((tt: any) => tt.tag_id) || [],
         })
         setShowModal(true)
     }
@@ -106,33 +138,63 @@ export default function TransactionsPage() {
                     const installments = generateInstallments(
                         {
                             ...basePayload,
-                            count: form.installments_count, // Passing count explicitly if needed by updated logic, or inferred? 
-                            // Wait, existing generateInstallments signature: (base, count, date)
-                            // We need to map basePayload to TransactionBase correctly
                         } as any,
                         form.installments_count,
-                        new Date(form.date)
+                        // Use local time (00:00:00) explicitly to ensure correct date in user's timezone (America/Sao_Paulo)
+                        new Date(form.date + 'T00:00:00')
                     )
 
-                    // Fix: generateInstallments expects specific fields. 
-                    // We should just use the function directly cleanly.
                     const transactionsToInsert = installments.map(t => ({
-                        ...t,
-                        date: t.date.toISOString().split('T')[0], // Convert back to string YYYY-MM-DD
-                        household_id: householdId,
-                        user_id: userId,
-                        // Ensure optional fields are handled
-                        account_id: form.account_id || null,
+                        description: t.description,
+                        amount: t.amount / (form.installments_count || 1), // Divide o valor total entre as parcelas
+                        type: t.type,
+                        // Use local date parts to construct YYYY-MM-DD string, avoiding UTC conversion shift
+                        date: `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, '0')}-${String(t.date.getDate()).padStart(2, '0')}`,
+                        category_id: t.category_id,
+                        account_id: t.account_id || null,
                         card_id: form.card_id || null,
-                        category_id: form.category_id || null,
                         notes: form.notes || null,
-                        type: form.type as any
+                        is_recurring: true,
+                        recurrence_type: 'monthly', // Using 'monthly' as standard recurrence type
+                        household_id: householdId,
+                        user_id: userId
                     }))
 
-                    await supabase.from('transactions').insert(transactionsToInsert)
+                    const { data: createdTxs, error: instError } = await supabase.from('transactions').insert(transactionsToInsert).select()
+                    if (instError) throw instError
+
+                    if (createdTxs && form.tag_ids.length > 0) {
+                        const tagLinks = createdTxs.flatMap(tx => form.tag_ids.map(tagId => ({
+                            transaction_id: tx.id,
+                            tag_id: tagId
+                        })))
+                        await supabase.from('transaction_tags').insert(tagLinks)
+                    }
                 } else {
                     // Standard single insert
-                    await supabase.from('transactions').insert(basePayload)
+                    const { data, error } = await supabase.from('transactions').insert(basePayload).select().single()
+                    if (error) throw error
+
+                    if (data && form.tag_ids.length > 0) {
+                        const tagLinks = form.tag_ids.map(tagId => ({
+                            transaction_id: data.id,
+                            tag_id: tagId
+                        }))
+                        await supabase.from('transaction_tags').insert(tagLinks)
+                    }
+                }
+            }
+
+            // Edit mode tag adjustment
+            if (editing) {
+                // Remove old, add new
+                await supabase.from('transaction_tags').delete().eq('transaction_id', editing.id)
+                if (form.tag_ids.length > 0) {
+                    const tagLinks = form.tag_ids.map(tagId => ({
+                        transaction_id: editing.id,
+                        tag_id: tagId
+                    }))
+                    await supabase.from('transaction_tags').insert(tagLinks)
                 }
             }
 
@@ -148,11 +210,79 @@ export default function TransactionsPage() {
 
     async function handleDelete(id: string) {
         if (!confirm('Tem certeza que deseja excluir esta transação?')) return
+        await supabase.from('transaction_tags').delete().eq('transaction_id', id)
         await supabase.from('transactions').delete().eq('id', id)
+        setSelectedIds(prev => prev.filter(i => i !== id))
         loadAll()
     }
 
-    const filteredTx = filterType === 'all' ? transactions : transactions.filter(t => t.type === filterType)
+    async function handleBulkDelete() {
+        if (selectedIds.length === 0) return
+        if (!confirm(`Tem certeza que deseja excluir as ${selectedIds.length} transações selecionadas?`)) return
+
+        setIsBulkDeleting(true)
+        try {
+            // Remove tags first
+            await supabase
+                .from('transaction_tags')
+                .delete()
+                .in('transaction_id', selectedIds)
+
+            const { error } = await supabase
+                .from('transactions')
+                .delete()
+                .in('id', selectedIds)
+
+            if (error) throw error
+
+            setSelectedIds([])
+            loadAll()
+        } catch (error) {
+            console.error('Erro ao excluir em massa:', error)
+            alert('Erro ao excluir algumas transações')
+        } finally {
+            setIsBulkDeleting(false)
+        }
+    }
+
+    function toggleSelect(id: string) {
+        setSelectedIds(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        )
+    }
+
+    function toggleSelectAll() {
+        if (selectedIds.length === filteredTx.length) {
+            setSelectedIds([])
+        } else {
+            setSelectedIds(filteredTx.map(t => t.id))
+        }
+    }
+
+    const filteredTx = (viewMode === 'list'
+        ? (filterType === 'all' ? transactions : transactions.filter(t => t.type === filterType))
+        : transactions.filter(t => {
+            if (!selectedCardId || t.card_id !== selectedCardId) return false
+            const card = cards.find(c => c.id === selectedCardId)
+            if (!card) return false
+            const closingDay = card.closing_day || 31
+            const periodEnd = new Date(invoiceYear, invoiceMonth - 1, closingDay)
+            const periodStart = new Date(invoiceYear, invoiceMonth - 2, closingDay + 1)
+            const transactionDate = new Date(t.date + 'T00:00:00')
+            return transactionDate >= periodStart && transactionDate <= periodEnd
+        })).filter(t => t.description.toLowerCase().includes(searchTerm.toLowerCase()))
+
+    const invoiceTotal = viewMode === 'invoices' ? filteredTx.reduce((acc, t) => acc + t.amount, 0) : 0
+
+    const prevInvoice = () => {
+        if (invoiceMonth === 1) { setInvoiceMonth(12); setInvoiceYear(y => y - 1) }
+        else setInvoiceMonth(m => m - 1)
+    }
+    const nextInvoice = () => {
+        if (invoiceMonth === 12) { setInvoiceMonth(1); setInvoiceYear(y => y + 1) }
+        else setInvoiceMonth(m => m + 1)
+    }
+
     const filteredCategories = categories.filter(c =>
         form.type === 'income' ? c.type === 'income' : c.type === 'expense'
     )
@@ -176,29 +306,136 @@ export default function TransactionsPage() {
                     <h1>Transações</h1>
                     <p>Gerencie suas receitas e despesas com precisão</p>
                 </div>
-                <button className="btn-nova-tx" onClick={openCreate}>
-                    <Plus size={20} /> Nova Transação
-                </button>
+                <div style={{ display: 'flex', gap: 12 }}>
+                    {selectedIds.length > 0 && (
+                        <button
+                            className="btn btn-secondary"
+                            onClick={handleBulkDelete}
+                            disabled={isBulkDeleting}
+                            style={{
+                                color: 'var(--color-danger)',
+                                borderColor: 'var(--color-danger)',
+                                background: 'rgba(239, 68, 68, 0.05)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                borderRadius: 10
+                            }}
+                        >
+                            <Trash2 size={18} />
+                            Excluir ({selectedIds.length})
+                        </button>
+                    )}
+                    <button className="btn-nova-tx" onClick={openCreate}>
+                        <Plus size={20} /> Nova Transação
+                    </button>
+                </div>
             </header>
 
-            {/* Filters */}
-            <div className="filter-bar">
-                <button
-                    className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
-                    onClick={() => setFilterType('all')}>
-                    Todas
-                </button>
-                <button
-                    className={`filter-btn ${filterType === 'income' ? 'active income' : ''}`}
-                    onClick={() => setFilterType('income')}>
-                    <TrendingUp size={16} /> Receitas
-                </button>
-                <button
-                    className={`filter-btn ${filterType === 'expense' ? 'active expense' : ''}`}
-                    onClick={() => setFilterType('expense')}>
-                    <TrendingDown size={16} /> Despesas
-                </button>
+            {/* View Switching & Main Filters */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 12, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
+                        <button
+                            className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => { setViewMode('list'); setSearchTerm('') }}
+                            style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                        >
+                            Lançamentos
+                        </button>
+                        <button
+                            className={`btn btn-sm ${viewMode === 'invoices' ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => { setViewMode('invoices'); setSearchTerm('') }}
+                            style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                        >
+                            Faturas
+                        </button>
+                    </div>
+
+                    <div className="search-input-wrapper" style={{ position: 'relative', width: 280 }}>
+                        <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
+                        <input
+                            type="text"
+                            placeholder={viewMode === 'list' ? "Buscar nos lançamentos..." : "Buscar na fatura..."}
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{
+                                width: '100%',
+                                padding: '8px 12px 8px 36px',
+                                borderRadius: 12,
+                                background: 'var(--color-bg-tertiary)',
+                                border: '1px solid var(--color-border)',
+                                fontSize: 13,
+                                color: 'var(--color-text-primary)'
+                            }}
+                        />
+                    </div>
+                </div>
+
+                {viewMode === 'list' ? (
+                    <div className="filter-bar" style={{ margin: 0, padding: 4, background: 'var(--color-bg-tertiary)', borderRadius: 12 }}>
+                        <button
+                            className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
+                            onClick={() => setFilterType('all')}>
+                            Todas
+                        </button>
+                        <button
+                            className={`filter-btn ${filterType === 'income' ? 'active income' : ''}`}
+                            onClick={() => setFilterType('income')}>
+                            <TrendingUp size={16} /> Receitas
+                        </button>
+                        <button
+                            className={`filter-btn ${filterType === 'expense' ? 'active expense' : ''}`}
+                            onClick={() => setFilterType('expense')}>
+                            <TrendingDown size={16} /> Despesas
+                        </button>
+                    </div>
+                ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
+                        <button className="btn btn-icon btn-ghost btn-sm" onClick={prevInvoice} style={{ borderRadius: 10 }}><ChevronLeft size={18} /></button>
+                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, minWidth: 140, textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            Fatura de {getMonthName(invoiceMonth)} {invoiceYear}
+                        </span>
+                        <button className="btn btn-icon btn-ghost btn-sm" onClick={nextInvoice} style={{ borderRadius: 10 }}><ChevronRight size={18} /></button>
+                    </div>
+                )}
             </div>
+
+            {viewMode === 'invoices' && (
+                <div style={{ marginBottom: 'var(--space-6)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--color-bg-secondary)', padding: 12, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
+                    <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 4 }}>
+                        {cards.map(card => (
+                            <button
+                                key={card.id}
+                                onClick={() => setSelectedCardId(card.id)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 8,
+                                    padding: '8px 16px',
+                                    borderRadius: 12,
+                                    border: '1px solid',
+                                    borderColor: selectedCardId === card.id ? card.color || 'var(--color-accent)' : 'var(--color-border)',
+                                    background: selectedCardId === card.id ? (card.color || '#10B981') + '10' : 'transparent',
+                                    color: selectedCardId === card.id ? card.color || 'var(--color-accent)' : 'var(--color-text-secondary)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                <CreditCard size={16} />
+                                <span style={{ fontWeight: 600, fontSize: 13 }}>{card.name}</span>
+                                {selectedCardId === card.id && <Check size={14} />}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Total da Fatura</div>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--color-text-primary)' }}>{formatCurrency(invoiceTotal)}</div>
+                    </div>
+                </div>
+            )}
 
             {/* Table */}
             <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
@@ -206,10 +443,19 @@ export default function TransactionsPage() {
                     <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                         <thead className="pro-table-header">
                             <tr>
+                                <th style={{ width: 40, paddingRight: 0 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={filteredTx.length > 0 && selectedIds.length === filteredTx.length}
+                                        onChange={toggleSelectAll}
+                                        style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                    />
+                                </th>
                                 <th>Data</th>
                                 <th>Descrição</th>
                                 <th>Categoria</th>
-                                <th>Conta / Cartão</th>
+                                <th>Tags</th>
+                                <th>Pagamento</th>
                                 <th style={{ textAlign: 'right' }}>Valor</th>
                                 <th style={{ width: 100, textAlign: 'center' }}>Ações</th>
                             </tr>
@@ -217,7 +463,7 @@ export default function TransactionsPage() {
                         <tbody>
                             {filteredTx.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} style={{ textAlign: 'center', padding: 'var(--space-16)', color: 'var(--color-text-tertiary)' }}>
+                                    <td colSpan={8} style={{ textAlign: 'center', padding: 'var(--space-16)', color: 'var(--color-text-tertiary)' }}>
                                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-4)' }}>
                                             <div style={{ padding: 'var(--space-4)', background: 'var(--color-bg-tertiary)', borderRadius: '50%' }}>
                                                 <TrendingUp size={24} style={{ opacity: 0.5 }} />
@@ -230,17 +476,35 @@ export default function TransactionsPage() {
                                 filteredTx.map((t, index) => (
                                     <tr key={t.id} style={{
                                         transition: 'background-color 0.2s',
-                                        backgroundColor: index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)' // subtle striping
+                                        backgroundColor: selectedIds.includes(t.id)
+                                            ? 'var(--color-accent-glow)'
+                                            : index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)'
                                     }}
-                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--color-bg-card-hover)'}
-                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)'}
+                                        onMouseEnter={(e) => {
+                                            if (!selectedIds.includes(t.id)) {
+                                                e.currentTarget.style.backgroundColor = 'var(--color-bg-card-hover)'
+                                            }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (!selectedIds.includes(t.id)) {
+                                                e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)'
+                                            }
+                                        }}
                                     >
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', paddingRight: 0 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedIds.includes(t.id)}
+                                                onChange={() => toggleSelect(t.id)}
+                                                style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                            />
+                                        </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
                                             {formatDate(t.date)}
                                         </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                             <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{t.description}</div>
-                                            {(t.installment_id || (t.is_recurring && t.recurrence_type === 'installment')) && (
+                                            {(t.installment_id || (t.is_recurring && (t.recurrence_type === 'installment' || /\(\d+\/\d+\)/.test(t.description)))) && (
                                                 <span style={{
                                                     fontSize: 10,
                                                     padding: '2px 8px',
@@ -268,6 +532,31 @@ export default function TransactionsPage() {
                                             }}>
                                                 {categories.find(c => c.id === t.category_id)?.name || 'Sem categoria'}
                                             </span>
+                                        </td>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                                {(t as any).transaction_tags?.length > 0 ? (
+                                                    (t as any).transaction_tags.map((tt: any) => {
+                                                        const tag = tags.find(tg => tg.id === tt.tag_id)
+                                                        if (!tag) return null
+                                                        return (
+                                                            <span key={tag.id} style={{
+                                                                fontSize: 10,
+                                                                padding: '2px 6px',
+                                                                borderRadius: 4,
+                                                                background: (tag.color || '#8B5CF6') + '20',
+                                                                color: tag.color || '#8B5CF6',
+                                                                border: `1px solid ${(tag.color || '#8B5CF6')}40`,
+                                                                fontWeight: 600
+                                                            }}>
+                                                                {tag.name}
+                                                            </span>
+                                                        )
+                                                    })
+                                                ) : (
+                                                    <span style={{ fontSize: 10, color: 'var(--color-text-muted)' }}>-</span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                             {t.account_id ? (
@@ -330,7 +619,7 @@ export default function TransactionsPage() {
             {/* Modal */}
             {showModal && (
                 <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal-content-pro" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 500 }}>
+                    <div className="modal-content-pro shadow-2xl" onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 500, maxHeight: '95vh', display: 'flex', flexDirection: 'column' }}>
                         <div className="modal-header-pro">
                             <h2>{editing ? 'Editar' : 'Nova'} Transação</h2>
                             <button className="btn btn-icon btn-ghost" onClick={() => setShowModal(false)}><X size={20} /></button>
@@ -438,10 +727,10 @@ export default function TransactionsPage() {
                                 </div>
 
                                 {/* Recurrence / Installments */}
-                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 16, border: '1px solid var(--color-border)' }}>
+                                <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 16, border: '1px solid var(--color-border)', marginBottom: 20 }}>
                                     <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: form.is_recurring ? 16 : 0 }}>
                                         <input type="checkbox" checked={form.is_recurring}
-                                            onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked, recurrence_type: e.target.checked ? 'fixed' : '' }))}
+                                            onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked, recurrence_type: e.target.checked ? 'monthly' : '' }))}
                                             style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer' }}
                                         />
                                         <span style={{ fontWeight: 600, fontSize: 14 }}>Transação recorrente ou parcelada?</span>
@@ -453,7 +742,7 @@ export default function TransactionsPage() {
                                                 <label className="input-label" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Frequência</label>
                                                 <select className="input select" value={form.recurrence_type}
                                                     onChange={e => setForm(f => ({ ...f, recurrence_type: e.target.value }))}>
-                                                    <option value="fixed">Fixo (Mensal)</option>
+                                                    <option value="monthly">Fixo (Mensal)</option>
                                                     <option value="installment">Parcelado</option>
                                                 </select>
                                             </div>
@@ -466,6 +755,123 @@ export default function TransactionsPage() {
                                             )}
                                         </div>
                                     )}
+                                </div>
+
+                                {/* Tags Selector (Multi-select) */}
+                                <div className="input-group" ref={tagsRef}>
+                                    <label className="input-label">Tags</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <div
+                                            className="input select"
+                                            onClick={() => setShowTagsDropdown(!showTagsDropdown)}
+                                            style={{
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                minHeight: 42,
+                                                backgroundImage: 'none' // Remove default arrow
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                                {form.tag_ids.length === 0 ? (
+                                                    <span style={{ color: 'var(--color-text-muted)' }}>Selecionar tags</span>
+                                                ) : (
+                                                    form.tag_ids.map(id => {
+                                                        const tag = tags.find(t => t.id === id)
+                                                        return (
+                                                            <span key={id} style={{
+                                                                fontSize: 11,
+                                                                background: (tag?.color || '#8B5CF6') + '20',
+                                                                color: tag?.color || '#8B5CF6',
+                                                                padding: '2px 8px',
+                                                                borderRadius: 4,
+                                                                border: `1px solid ${(tag?.color || '#8B5CF6')}40`,
+                                                                fontWeight: 600
+                                                            }}>
+                                                                {tag?.name}
+                                                            </span>
+                                                        )
+                                                    })
+                                                )}
+                                            </div>
+                                            <ChevronDown size={16} style={{ color: 'var(--color-text-tertiary)', transition: 'transform 0.2s', transform: showTagsDropdown ? 'rotate(180deg)' : 'none' }} />
+                                        </div>
+
+                                        {showTagsDropdown && (
+                                            <div style={{
+                                                position: 'absolute',
+                                                top: 'calc(100% + 4px)',
+                                                left: 0,
+                                                right: 0,
+                                                background: 'var(--color-bg-secondary)',
+                                                border: '1px solid var(--color-border-hover)',
+                                                borderRadius: 'var(--radius-md)',
+                                                boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+                                                zIndex: 50,
+                                                maxHeight: 240,
+                                                overflowY: 'auto',
+                                                padding: 6,
+                                                animation: 'modal-pop 0.2s ease'
+                                            }}>
+                                                {tags.length === 0 && (
+                                                    <div style={{ padding: 12, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 13 }}>
+                                                        Nenhuma tag disponível
+                                                    </div>
+                                                )}
+                                                {tags.map(tag => {
+                                                    const isSelected = form.tag_ids.includes(tag.id)
+                                                    return (
+                                                        <div
+                                                            key={tag.id}
+                                                            onClick={() => setForm(f => ({
+                                                                ...f,
+                                                                tag_ids: isSelected ? f.tag_ids.filter(id => id !== tag.id) : [...f.tag_ids, tag.id]
+                                                            }))}
+                                                            style={{
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                gap: 10,
+                                                                padding: '10px 12px',
+                                                                borderRadius: 8,
+                                                                cursor: 'pointer',
+                                                                transition: 'all 0.15s',
+                                                                background: isSelected ? 'var(--color-bg-tertiary)' : 'transparent'
+                                                            }}
+                                                            onMouseEnter={(e) => e.currentTarget.style.background = 'var(--color-bg-tertiary)'}
+                                                            onMouseLeave={(e) => e.currentTarget.style.background = isSelected ? 'var(--color-bg-tertiary)' : 'transparent'}
+                                                        >
+                                                            <div style={{
+                                                                width: 18,
+                                                                height: 18,
+                                                                borderRadius: 4,
+                                                                border: `2px solid ${isSelected ? (tag.color || '#8B5CF6') : 'var(--color-border)'}`,
+                                                                background: isSelected ? (tag.color || '#8B5CF6') : 'transparent',
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'center',
+                                                                color: 'white',
+                                                                transition: 'all 0.15s'
+                                                            }}>
+                                                                {isSelected && <Check size={12} strokeWidth={4} />}
+                                                            </div>
+                                                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: tag.color || '#8B5CF6', flexShrink: 0 }} />
+                                                            <span style={{
+                                                                fontSize: 13,
+                                                                color: isSelected ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                                                                fontWeight: isSelected ? 600 : 400,
+                                                                whiteSpace: 'nowrap',
+                                                                overflow: 'hidden',
+                                                                textOverflow: 'ellipsis'
+                                                            }}>
+                                                                {tag.name}
+                                                            </span>
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Notes */}

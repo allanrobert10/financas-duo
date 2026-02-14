@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { Category } from '@/types/database'
-import { Plus, Pencil, Trash2, FolderOpen, ArrowUpRight, ArrowDownRight } from 'lucide-react'
+import { Plus, Pencil, Trash2, FolderOpen, ArrowUpRight, ArrowDownRight, FileUp, Download, CheckSquare, Square } from 'lucide-react'
 import { SkeletonCards } from '@/components/Skeleton'
+import { generateCategoryTemplate, parseCategoryImport } from '@/utils/excel'
 
 const ICON_OPTIONS = [
     'utensils', 'car', 'home', 'heart', 'book', 'gamepad', 'coffee',
@@ -16,6 +17,8 @@ const COLOR_OPTIONS = [
     '#10B981', '#3B82F6', '#8B5CF6', '#EF4444', '#06B6D4',
     '#F59E0B', '#EC4899', '#14B8A6', '#6366F1', '#64748B',
     '#F97316', '#84CC16', '#A855F7', '#0EA5E9', '#E11D48',
+    '#000000', '#1A1A1A', '#D4AF37', '#A1A1AA', '#581C87',
+    '#064E3B', '#1E3A8A', '#7F1D1D', '#431407'
 ]
 
 export default function CategoriesPage() {
@@ -32,6 +35,11 @@ export default function CategoriesPage() {
     const [icon, setIcon] = useState('tag')
     const [color, setColor] = useState('#10B981')
     const [type, setType] = useState<'expense' | 'income'>('expense')
+
+    // Selection & Import state
+    const [selectedIds, setSelectedIds] = useState<string[]>([])
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+    const [isImporting, setIsImporting] = useState(false)
 
     useEffect(() => { loadCategories() }, [])
 
@@ -88,6 +96,91 @@ export default function CategoriesPage() {
         loadCategories()
     }
 
+    function toggleSelect(id: string) {
+        setSelectedIds(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        )
+    }
+
+    function toggleSelectAll(filteredItems: Category[]) {
+        if (selectedIds.length === filteredItems.length && filteredItems.every(c => selectedIds.includes(c.id))) {
+            const currentFilteredIds = filteredItems.map(c => c.id)
+            setSelectedIds(prev => prev.filter(id => !currentFilteredIds.includes(id)))
+        } else {
+            const currentFilteredIds = filteredItems.map(c => c.id)
+            setSelectedIds(prev => Array.from(new Set([...prev, ...currentFilteredIds])))
+        }
+    }
+
+    async function handleBulkDelete() {
+        if (selectedIds.length === 0) return
+        if (!confirm(`Tem certeza que deseja excluir as ${selectedIds.length} categorias selecionadas? Transações vinculadas perderão essas categorias.`)) return
+
+        setIsBulkDeleting(true)
+        try {
+            const { error } = await supabase
+                .from('categories')
+                .delete()
+                .in('id', selectedIds)
+
+            if (error) throw error
+
+            setSelectedIds([])
+            loadCategories()
+        } catch (error) {
+            console.error('Erro ao excluir categorias:', error)
+            alert('Erro ao excluir algumas categorias')
+        } finally {
+            setIsBulkDeleting(false)
+        }
+    }
+
+    async function handleImportCategories(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        setIsImporting(true)
+        try {
+            const imported = await parseCategoryImport(file)
+            if (imported.length === 0) {
+                alert('Nenhuma categoria válida encontrada no arquivo.')
+                return
+            }
+
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) throw new Error('Não autenticado')
+
+            const { data: profile } = await supabase.from('profiles').select('household_id').eq('id', user.id).single()
+            if (!profile?.household_id) throw new Error('Perfil não encontrado')
+
+            // Filter out existing categories (case insensitive)
+            const existingNames = new Set(categories.map(c => c.name.toLowerCase()))
+            const newCategories = imported
+                .filter(c => !existingNames.has(c.name.toLowerCase()))
+                .map(c => ({
+                    ...c,
+                    household_id: profile.household_id
+                }))
+
+            if (newCategories.length === 0) {
+                alert('Todas as categorias do arquivo já existem no sistema.')
+                return
+            }
+
+            const { error } = await supabase.from('categories').insert(newCategories)
+            if (error) throw error
+
+            alert(`${newCategories.length} novas categorias importadas com sucesso!`)
+            loadCategories()
+        } catch (error) {
+            console.error('Erro ao importar categorias:', error)
+            alert('Falha ao importar categorias. Verifique o formato do arquivo.')
+        } finally {
+            setIsImporting(false)
+            e.target.value = ''
+        }
+    }
+
     const filtered = filterType === 'all'
         ? categories
         : categories.filter(c => c.type === filterType)
@@ -131,6 +224,61 @@ export default function CategoriesPage() {
                 </div>
             </div>
 
+            {/* Bulk Actions & Import */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 24,
+                padding: '12px 16px',
+                background: 'var(--color-bg-tertiary)',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--color-border)'
+            }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => toggleSelectAll(filtered)}
+                        title={selectedIds.length === filtered.length ? "Deselecionar todos" : "Selecionar todos"}
+                    >
+                        {filtered.length > 0 && selectedIds.length === filtered.length ? <CheckSquare size={18} /> : <Square size={18} />}
+                        <span style={{ marginLeft: 8 }}>{selectedIds.length === filtered.length ? 'Deselecionar' : 'Selecionar Todos'}</span>
+                    </button>
+
+                    {selectedIds.length > 0 && (
+                        <button
+                            className="btn btn-sm"
+                            onClick={handleBulkDelete}
+                            disabled={isBulkDeleting}
+                            style={{
+                                background: 'rgba(239, 68, 68, 0.1)',
+                                color: 'var(--color-danger)',
+                                border: '1px solid rgba(239, 68, 68, 0.2)'
+                            }}
+                        >
+                            <Trash2 size={16} />
+                            Excluir {selectedIds.length} {selectedIds.length === 1 ? 'Categoria' : 'Categorias'}
+                        </button>
+                    )}
+                </div>
+
+                <div style={{ display: 'flex', gap: 12 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={generateCategoryTemplate}>
+                        <Download size={16} /> Modelo
+                    </button>
+                    <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer' }}>
+                        <FileUp size={16} /> {isImporting ? 'Importando...' : 'Importar Planilha'}
+                        <input
+                            type="file"
+                            accept=".xlsx, .xls"
+                            onChange={handleImportCategories}
+                            disabled={isImporting}
+                            style={{ display: 'none' }}
+                        />
+                    </label>
+                </div>
+            </div>
+
             {/* Expense Categories */}
             {(filterType === 'all' || filterType === 'expense') && (
                 <div style={{ marginBottom: 32 }}>
@@ -146,7 +294,14 @@ export default function CategoriesPage() {
                     {expenseCategories.length > 0 ? (
                         <div className="grid-3 stagger-container">
                             {expenseCategories.map(cat => (
-                                <CategoryCard key={cat.id} cat={cat} onEdit={openEdit} onDelete={handleDelete} />
+                                <CategoryCard
+                                    key={cat.id}
+                                    cat={cat}
+                                    onEdit={openEdit}
+                                    onDelete={handleDelete}
+                                    isSelected={selectedIds.includes(cat.id)}
+                                    onSelect={() => toggleSelect(cat.id)}
+                                />
                             ))}
                         </div>
                     ) : (
@@ -172,7 +327,14 @@ export default function CategoriesPage() {
                     {incomeCategories.length > 0 ? (
                         <div className="grid-3 stagger-container">
                             {incomeCategories.map(cat => (
-                                <CategoryCard key={cat.id} cat={cat} onEdit={openEdit} onDelete={handleDelete} />
+                                <CategoryCard
+                                    key={cat.id}
+                                    cat={cat}
+                                    onEdit={openEdit}
+                                    onDelete={handleDelete}
+                                    isSelected={selectedIds.includes(cat.id)}
+                                    onSelect={() => toggleSelect(cat.id)}
+                                />
                             ))}
                         </div>
                     ) : (
@@ -233,12 +395,12 @@ export default function CategoriesPage() {
 
                             <div className="input-group">
                                 <label className="input-label">Cor</label>
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 8 }}>
                                     {COLOR_OPTIONS.map(c => (
                                         <button key={c} type="button" onClick={() => setColor(c)}
                                             style={{
-                                                width: 28, height: 28, borderRadius: '50%', background: c,
-                                                border: color === c ? '3px solid white' : '2px solid transparent',
+                                                width: '100%', aspectRatio: '1/1', borderRadius: '50%', background: c,
+                                                border: color === c ? (c === '#000000' ? '2px solid var(--color-accent)' : '3px solid white') : '1px solid rgba(255,255,255,0.1)',
                                                 cursor: 'pointer', boxShadow: color === c ? `0 0 0 2px ${c}` : 'none',
                                             }}
                                         />
@@ -278,13 +440,37 @@ export default function CategoriesPage() {
     )
 }
 
-function CategoryCard({ cat, onEdit, onDelete }: {
+function CategoryCard({ cat, onEdit, onDelete, isSelected, onSelect }: {
     cat: Category
     onEdit: (c: Category) => void
     onDelete: (id: string) => void
+    isSelected: boolean
+    onSelect: () => void
 }) {
     return (
-        <div className="glass-card card-hover-lift stagger-item" style={{ padding: 16 }}>
+        <div
+            className="glass-card card-hover-lift stagger-item"
+            style={{
+                padding: 16,
+                position: 'relative',
+                border: isSelected ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                background: isSelected ? 'var(--color-accent-glow)' : 'var(--color-bg-card)',
+                transition: 'all 0.2s ease-in-out'
+            }}
+            onClick={(e) => {
+                // Prevent selection if clicking buttons
+                if ((e.target as HTMLElement).closest('button')) return
+                onSelect()
+            }}
+        >
+            <div style={{ position: 'absolute', top: 12, right: 12 }}>
+                <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={onSelect}
+                    style={{ width: 16, height: 16, cursor: 'pointer' }}
+                />
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div style={{
                     width: 40, height: 40, borderRadius: 'var(--radius-md)',

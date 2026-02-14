@@ -33,7 +33,7 @@ export function generateInstallments(
 
         transactions.push({
             ...baseTransaction,
-            date: startOfDay(date),
+            date: date,
             installment_id: installmentId,
             installment_number: i + 1,
             total_installments: installments,

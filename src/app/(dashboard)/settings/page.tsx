@@ -252,7 +252,8 @@ export default function SettingsPage() {
                 .select(`
                     *,
                     categories (name),
-                    accounts (name)
+                    accounts (name),
+                    cards (name)
                 `)
                 .eq('household_id', profile.household_id)
                 .order('date', { ascending: false })
@@ -269,8 +270,9 @@ export default function SettingsPage() {
                 description: t.description,
                 amount: t.amount,
                 type: t.type,
-                category: t.categories, // Supabase returns object/array based on relationship
-                account: t.accounts,
+                category: t.categories,
+                accounts: t.accounts,
+                cards: t.cards,
                 notes: t.notes
             }))
 
@@ -299,7 +301,7 @@ export default function SettingsPage() {
                 return
             }
 
-            // 1. Fetch existing categories and accounts to map names to IDs
+            // 1. Fetch existing categories, accounts and cards to map names to IDs
             const { data: categories } = await supabase
                 .from('categories')
                 .select('id, name, type')
@@ -310,32 +312,48 @@ export default function SettingsPage() {
                 .select('id, name')
                 .eq('household_id', profile.household_id)
 
+            const { data: cards } = await supabase
+                .from('cards')
+                .select('id, name')
+                .eq('household_id', profile.household_id)
+
             const categoryMap = new Map(categories?.map(c => [c.name.toLowerCase(), c.id]))
             const accountMap = new Map(accounts?.map(a => [a.name.toLowerCase(), a.id]))
+            const cardMap = new Map(cards?.map(c => [c.name.toLowerCase(), c.id]))
 
-            // Default Fallbacks (Optional: create if not exists, or verify user intent. For now, try to find or fail/skip)
-            // Strategy: If category not found, use a default "Outros" or create it. Let's try to match loosely.
+            const { data: existingTags } = await supabase
+                .from('tags')
+                .select('id, name')
+                .eq('household_id', profile.household_id)
+            const tagMap = new Map(existingTags?.map(tag => [tag.name.toLowerCase(), tag.id]))
 
             let successCount = 0
             let errors = 0
 
             for (const t of transactions) {
-                // Find Account
-                let accountId = accountMap.get(t.account.toLowerCase())
-                if (!accountId) {
-                    // Try to find ANY match or skip? Let's skip for safety if account doesn't exist to avoid data inconsistency.
-                    // Or create a placeholder? Creating accounts is complex (type, balance). 
-                    // Let's Log error for now.
-                    console.warn(`Conta não encontrada: ${t.account}`)
-                    errors++
-                    continue
+                let accountId = null
+                let cardId = null
+
+                if (t.paymentMethod === 'conta') {
+                    accountId = accountMap.get(t.paymentName.toLowerCase())
+                    if (!accountId) {
+                        console.warn(`Conta não encontrada: ${t.paymentName}`)
+                        errors++
+                        continue
+                    }
+                } else {
+                    cardId = cardMap.get(t.paymentName.toLowerCase())
+                    if (!cardId) {
+                        console.warn(`Cartão não encontrado: ${t.paymentName}`)
+                        errors++
+                        continue
+                    }
                 }
 
                 // Find Category
                 let categoryId = categoryMap.get(t.category.toLowerCase())
                 if (!categoryId) {
-                    // Create Category if not exists?
-                    // Let's create it.
+                    // Create Category if not exists
                     const { data: newCat, error: catError } = await supabase
                         .from('categories')
                         .insert({
@@ -358,38 +376,58 @@ export default function SettingsPage() {
                 }
 
                 // Insert Transaction
-                const { error: insertError } = await supabase.from('transactions').insert({
+                const { data: newTransaction, error: insertError } = await supabase.from('transactions').insert({
                     description: t.description,
                     amount: t.amount,
                     type: t.type,
                     date: t.date, // Format YYYY-MM-DD
                     category_id: categoryId,
                     account_id: accountId,
+                    card_id: cardId,
                     household_id: profile.household_id,
                     user_id: profile.id,
-                    notes: t.notes || ''
-                })
+                    notes: t.notes || '',
+                    is_recurring: t.isInstallment || false,
+                    recurrence_type: t.isInstallment ? 'installment' : null
+                }).select().single()
 
                 if (insertError) {
                     console.error('Erro ao inserir:', insertError)
                     errors++
-                } else {
-                    // Update Account Balance?
-                    // Usually handled by Triggers or manual logic. 
-                    // Assuming Database Triggers or raw insert is "generating automatically". 
-                    // If the app relies on manual balance updates, we should update it. 
-                    // checking `database.ts` schema, `balance` is in accounts.
-                    // Let's assume for now we just insert transactions. 
-                    // **Wait**, if user expects "saldos" to update, we must ensure account balance updates.
-                    // I will check if there are RPC functions for this or if I need to do it.
-                    // For safety/speed, I'll update account balance here manually if needed, 
-                    // but looking at `transactions` insert, usually an `after insert` trigger handles this in robust systems.
-                    // Given I don't see triggers in the schema view (it just showed table definitions), 
-                    // I'll assume simple insert is enough or standard behavior.
-
-                    // Actually, let's allow the Insert. 
-                    // To be safe regarding balance, I'll assume the system recalculates or uses a Trigger.
+                } else if (newTransaction) {
                     successCount++
+
+                    // Handle tags link
+                    if (t.tags) {
+                        const tagNames = t.tags.split(',').map(name => name.trim()).filter(Boolean)
+                        const tagIdsToLink: string[] = []
+
+                        for (const tagName of tagNames) {
+                            let tagId = tagMap.get(tagName.toLowerCase())
+                            if (!tagId) {
+                                // Create missing tag
+                                const { data: newTag } = await supabase
+                                    .from('tags')
+                                    .insert({ name: tagName, household_id: profile.household_id, color: '#8B5CF6' })
+                                    .select()
+                                    .single()
+
+                                if (newTag) {
+                                    tagId = newTag.id
+                                    tagMap.set(tagName.toLowerCase(), tagId)
+                                }
+                            }
+                            if (tagId) tagIdsToLink.push(tagId)
+                        }
+
+                        if (tagIdsToLink.length > 0) {
+                            const tagLinks = tagIdsToLink.map(tagId => ({
+                                transaction_id: newTransaction.id,
+                                tag_id: tagId
+                            }))
+                            await supabase.from('transaction_tags').insert(tagLinks)
+                        }
+                    }
                 }
             }
 
@@ -399,7 +437,7 @@ export default function SettingsPage() {
                     text: `${successCount} transações importadas com sucesso! ${errors > 0 ? `(${errors} erros)` : ''}`
                 })
             } else {
-                setDataMsg({ type: 'error', text: 'Falha ao importar transações. Verifique se as Contas existem no sistema.' })
+                setDataMsg({ type: 'error', text: 'Falha ao importar transações. Verifique se as Contas/Cartões existem no sistema.' })
             }
 
         } catch (error: any) {

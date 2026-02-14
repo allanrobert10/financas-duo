@@ -14,7 +14,10 @@ const ACCOUNT_TYPES = [
     { value: 'investment', label: 'Investimento', icon: TrendingUp },
 ]
 
-const ACC_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#6366F1', '#EF4444', '#EC4899', '#8B5CF6', '#14B8A6']
+const ACC_COLORS = [
+    '#10B981', '#3B82F6', '#F59E0B', '#6366F1', '#EF4444', '#EC4899', '#8B5CF6', '#14B8A6',
+    '#000000', '#1A1A1A', '#D4AF37', '#A1A1AA', '#581C87', '#064E3B', '#1E3A8A', '#7F1D1D'
+]
 
 export default function AccountsPage() {
     const supabase = createClient()
@@ -190,11 +193,11 @@ export default function AccountsPage() {
                                 </div>
                                 <div className="input-group">
                                     <label className="input-label">Cor de Identificação</label>
-                                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 10 }}>
                                         {ACC_COLORS.map(c => (
                                             <button key={c} type="button"
                                                 style={{
-                                                    width: 36, height: 36, borderRadius: 12, background: c,
+                                                    width: '100%', aspectRatio: '1/1', borderRadius: 12, background: c,
                                                     border: form.color === c ? '3px solid #fff' : '2px solid transparent',
                                                     boxShadow: form.color === c ? `0 0 0 2px ${c}` : 'none',
                                                     cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',

@@ -600,6 +600,18 @@ a:hover {
   }
 }
 
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 @keyframes pulse-glow {
 
   0%,
@@ -1374,6 +1386,7 @@ a:hover {
   font-size: 11px;
   position: relative;
   z-index: 1;
+  text-align: left;
   border-bottom: none !important;
   /* Managed by pseudo-element */
 }
@@ -1523,6 +1536,23 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  max-height: calc(90vh - 140px);
+  /* Ajuste baseado no header e footer */
+  overflow-y: auto;
+}
+
+/* Custom scrollbar for modal body */
+.modal-body-pro::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-body-pro::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body-pro::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover);
+  border-radius: 10px;
 }
 
 .modal-footer-pro {
