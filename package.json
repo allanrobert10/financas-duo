@@ -36,6 +36,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "jsdom": "^28.0.0",
+    "supabase": "^2.76.8",
     "typescript": "^5",
     "vitest": "^4.0.18"
   }

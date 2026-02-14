@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import {
+    formatCurrency,
+    formatDate,
+    getTodayDateInputValue,
+    parseDateInputValue,
+    toDateInputValue,
+} from '@/lib/utils'
 import type { Transaction, Category, Account, Card, Tag } from '@/types/database'
 import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
@@ -24,7 +30,7 @@ export default function TransactionsPage() {
 
     const [form, setForm] = useState({
         description: '', amount: '', type: 'expense' as string,
-        category_id: '', account_id: '', card_id: '', date: new Date().toISOString().split('T')[0],
+        category_id: '', account_id: '', card_id: '', date: getTodayDateInputValue(),
         notes: '', is_recurring: false, recurrence_type: '' as string,
         installments_count: 2,
     })
@@ -40,7 +46,11 @@ export default function TransactionsPage() {
         if (profile?.household_id) setHouseholdId(profile.household_id)
 
         const [txR, catR, accR, cardR, tagR] = await Promise.all([
-            supabase.from('transactions').select('*').order('date', { ascending: false }),
+            supabase
+                .from('transactions')
+                .select('*')
+                .order('date', { ascending: false })
+                .order('created_at', { ascending: false, nullsFirst: false }),
             supabase.from('categories').select('*'),
             supabase.from('accounts').select('*').eq('is_active', true),
             supabase.from('cards').select('*').eq('is_active', true),
@@ -59,7 +69,7 @@ export default function TransactionsPage() {
         setEditing(null)
         setForm({
             description: '', amount: '', type: 'expense', category_id: '',
-            account_id: '', card_id: '', date: new Date().toISOString().split('T')[0],
+            account_id: '', card_id: '', date: getTodayDateInputValue(),
             notes: '', is_recurring: false, recurrence_type: '', installments_count: 2,
         })
         setShowModal(true)
@@ -111,14 +121,14 @@ export default function TransactionsPage() {
                             // We need to map basePayload to TransactionBase correctly
                         } as any,
                         form.installments_count,
-                        new Date(form.date)
+                        parseDateInputValue(form.date)
                     )
 
                     // Fix: generateInstallments expects specific fields. 
                     // We should just use the function directly cleanly.
                     const transactionsToInsert = installments.map(t => ({
                         ...t,
-                        date: t.date.toISOString().split('T')[0], // Convert back to string YYYY-MM-DD
+                        date: toDateInputValue(t.date), // Keep local YYYY-MM-DD without UTC shift
                         household_id: householdId,
                         user_id: userId,
                         // Ensure optional fields are handled

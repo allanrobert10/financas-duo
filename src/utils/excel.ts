@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { formatDate, toDateInputValue } from '@/lib/utils';
 
 export interface TransactionImportData {
     date: string;
@@ -82,14 +83,18 @@ export const parseImport = async (file: File): Promise<TransactionImportData[]> 
                          // Handle Excel Date Serial Number or String
                          let date = dateRaw;
                          if (typeof dateRaw === 'number') {
-                             const dateObj = new Date(Math.round((dateRaw - 25569) * 86400 * 1000));
-                             // Adjust for timezone offset if necessary or format as YYYY-MM-DD
-                             date = dateObj.toISOString().split('T')[0];
+                             const parsedExcelDate = XLSX.SSF.parse_date_code(dateRaw);
+                             if (!parsedExcelDate) {
+                                return null;
+                             }
+                             const dateObj = new Date(parsedExcelDate.y, parsedExcelDate.m - 1, parsedExcelDate.d);
+                             date = toDateInputValue(dateObj);
                          } else if (typeof dateRaw === 'string') {
                              // Expecting DD/MM/AAAA
                              const parts = dateRaw.split('/');
                              if (parts.length === 3) {
-                                 date = `${parts[2]}-${parts[1]}-${parts[0]}`;
+                                 const [day, month, year] = parts;
+                                 date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
                              }
                          }
 
@@ -118,7 +123,7 @@ export const parseImport = async (file: File): Promise<TransactionImportData[]> 
 
 export const exportTransactions = (transactions: any[]) => {
     const data = transactions.map(t => [
-        new Date(t.date).toLocaleDateString('pt-BR'),
+        formatDate(t.date),
         t.description,
         t.amount,
         t.type === 'income' ? 'Receita' : 'Despesa',

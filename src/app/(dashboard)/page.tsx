@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency, getMonthName } from '@/lib/utils'
+import { formatCurrency, formatDate, getMonthName, getTodayDateInputValue } from '@/lib/utils'
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
     PieChart as RePieChart, Pie, Cell
@@ -30,6 +30,7 @@ export default function DashboardPage() {
     const [savingBudget, setSavingBudget] = useState(false)
 
     const now = new Date()
+    const todayDate = getTodayDateInputValue()
     const [month, setMonth] = useState(now.getMonth() + 1)
     const [year, setYear] = useState(now.getFullYear())
 
@@ -43,7 +44,11 @@ export default function DashboardPage() {
 
         const [profileRes, txRes, catRes, budgetRes] = await Promise.all([
             supabase.from('profiles').select('*').eq('id', user.id).single(),
-            supabase.from('transactions').select('*').order('date', { ascending: false }),
+            supabase
+                .from('transactions')
+                .select('*')
+                .order('date', { ascending: false })
+                .order('created_at', { ascending: false, nullsFirst: false }),
             supabase.from('categories').select('*'),
             supabase.from('budgets').select('*').eq('month', month).eq('year', year)
         ])
@@ -120,8 +125,6 @@ export default function DashboardPage() {
 
     // Current month transactions
     const monthTx = transactions.filter(t => {
-        const d = new Date(t.date)
-        // Fix timezone offset issue by treating date as string YYYY-MM-DD
         const [tYear, tMonth] = t.date.split('-').map(Number)
         return tMonth === month && tYear === year
     })
@@ -148,8 +151,8 @@ export default function DashboardPage() {
     const barData = barPeriod === 'today' ? [
         {
             name: 'Hoje',
-            receitas: transactions.filter(t => t.type === 'income' && t.date === now.toISOString().split('T')[0]).reduce((s, t) => s + t.amount, 0),
-            despesas: transactions.filter(t => t.type === 'expense' && t.date === now.toISOString().split('T')[0]).reduce((s, t) => s + t.amount, 0),
+            receitas: transactions.filter(t => t.type === 'income' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
+            despesas: transactions.filter(t => t.type === 'expense' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
         }
     ] : Array.from({ length: barPeriod as number }, (_, i) => {
         let m = month - ((barPeriod as number) - 1 - i)
@@ -440,7 +443,7 @@ export default function DashboardPage() {
                                         const cat = categories.find(c => c.id === tx.category_id)
                                         return (
                                             <tr key={tx.id} className="table-row-hover">
-                                                <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{new Date(tx.date).toLocaleDateString('pt-BR')}</td>
+                                                <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{formatDate(tx.date)}</td>
                                                 <td>
                                                     <div style={{ fontWeight: 700, color: 'var(--color-text-primary)', fontSize: 14 }}>{tx.description}</div>
                                                 </td>
