@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { Suspense, useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -15,7 +15,7 @@ import type { Transaction, Category, Account, Card, Tag } from '@/types/database
 import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet, ChevronDown, Check, ChevronLeft, ChevronRight, Calendar, Search } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
 
-export default function TransactionsPage() {
+function TransactionsPageContent() {
     const supabase = createClient()
     const searchParams = useSearchParams()
     const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -1260,5 +1260,21 @@ export default function TransactionsPage() {
                 </div>
             )}
         </div>
+    )
+}
+
+export default function TransactionsPage() {
+    return (
+        <Suspense fallback={
+            <div className="fade-in">
+                <div style={{ marginBottom: 'var(--space-8)' }}>
+                    <div className="skeleton skeleton-heading" style={{ width: '25%' }} />
+                    <div className="skeleton skeleton-text sm" style={{ width: '18%' }} />
+                </div>
+                <SkeletonTable rows={8} />
+            </div>
+        }>
+            <TransactionsPageContent />
+        </Suspense>
     )
 }
