@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
     formatCurrency,
@@ -16,6 +17,7 @@ import { SkeletonTable } from '@/components/Skeleton'
 
 export default function TransactionsPage() {
     const supabase = createClient()
+    const searchParams = useSearchParams()
     const [transactions, setTransactions] = useState<Transaction[]>([])
     const [categories, setCategories] = useState<Category[]>([])
     const [accounts, setAccounts] = useState<Account[]>([])
@@ -27,7 +29,12 @@ export default function TransactionsPage() {
     const [saving, setSaving] = useState(false)
     const [showTagsDropdown, setShowTagsDropdown] = useState(false)
     const tagsRef = useRef<HTMLDivElement>(null)
-    const [viewMode, setViewMode] = useState<'list' | 'invoices'>('list')
+    const [viewMode, setViewMode] = useState<'list' | 'invoices' | 'third-party'>(() => {
+        const fromUrl = searchParams.get('view')
+        if (fromUrl === 'list' || fromUrl === 'invoices' || fromUrl === 'third-party') return fromUrl
+        return searchParams.get('focus') === 'third-party' ? 'third-party' : 'list'
+    })
+    const isThirdPartyOnly = viewMode === 'third-party'
     const [selectedCardId, setSelectedCardId] = useState<string>('')
     const [invoiceMonth, setInvoiceMonth] = useState(new Date().getMonth() + 1)
     const [invoiceYear, setInvoiceYear] = useState(new Date().getFullYear())
@@ -37,6 +44,23 @@ export default function TransactionsPage() {
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [isBulkDeleting, setIsBulkDeleting] = useState(false)
     const [searchTerm, setSearchTerm] = useState('')
+    const [thirdPartySearchTerm, setThirdPartySearchTerm] = useState('')
+    const [thirdPartyMonth, setThirdPartyMonth] = useState(() => {
+        const fromUrl = Number(searchParams.get('month'))
+        if (Number.isInteger(fromUrl) && fromUrl >= 1 && fromUrl <= 12) return fromUrl
+        return new Date().getMonth() + 1
+    })
+    const [thirdPartyYear, setThirdPartyYear] = useState(() => {
+        const fromUrl = Number(searchParams.get('year'))
+        if (Number.isInteger(fromUrl) && fromUrl >= 2000 && fromUrl <= 3000) return fromUrl
+        return new Date().getFullYear()
+    })
+    const [markingThirdPartyId, setMarkingThirdPartyId] = useState<string | null>(null)
+    const [thirdPartyFilter, setThirdPartyFilter] = useState<'all' | 'pending' | 'paid'>(() => {
+        const fromUrl = searchParams.get('thirdParty')
+        if (fromUrl === 'pending' || fromUrl === 'paid' || fromUrl === 'all') return fromUrl
+        return 'all'
+    })
 
     const [form, setForm] = useState({
         description: '', amount: '', type: 'expense' as string,
@@ -124,7 +148,7 @@ export default function TransactionsPage() {
 
     function getSaveErrorMessage(error: unknown): string {
         const rawMessage = (error as any)?.message || ''
-        if (/is_third_party|third_party_name|schema cache|column .* does not exist/i.test(rawMessage)) {
+        if (/is_third_party|third_party_name|third_party_status|third_party_paid_at|schema cache|column .* does not exist/i.test(rawMessage)) {
             return 'Seu banco ainda nao tem os campos de terceiros. Rode a migration no Supabase e tente novamente.'
         }
         return rawMessage || 'Erro ao salvar transacao'
@@ -273,6 +297,27 @@ export default function TransactionsPage() {
         }
     }
 
+    async function handleMarkThirdPartyPaid(id: string) {
+        try {
+            setMarkingThirdPartyId(id)
+            const { error } = await supabase
+                .from('transactions')
+                .update({
+                    third_party_status: 'paid',
+                    third_party_paid_at: new Date().toISOString(),
+                } as any)
+                .eq('id', id)
+
+            if (error) throw error
+            await loadAll()
+        } catch (error) {
+            console.error('Erro ao marcar terceiro como pago:', error)
+            alert(getSaveErrorMessage(error))
+        } finally {
+            setMarkingThirdPartyId(null)
+        }
+    }
+
     function toggleSelect(id: string) {
         setSelectedIds(prev =>
             prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
@@ -305,6 +350,38 @@ export default function TransactionsPage() {
         })
 
     const invoiceTotal = viewMode === 'invoices' ? filteredTx.reduce((acc, t) => acc + t.amount, 0) : 0
+    const thirdPartyMonthRows = transactions
+        .filter(t => t.type === 'expense' && t.is_third_party)
+        .filter(t => {
+            const [tYear, tMonth] = t.date.split('-').map(Number)
+            return tMonth === thirdPartyMonth && tYear === thirdPartyYear
+        })
+    const thirdPartyBaseRows = thirdPartyMonthRows
+        .filter(t => {
+            const query = thirdPartySearchTerm.toLowerCase().trim()
+            if (!query) return true
+            const paymentName = t.account_id
+                ? (accounts.find(a => a.id === t.account_id)?.name || '')
+                : (cards.find(c => c.id === t.card_id)?.name || '')
+            return t.description.toLowerCase().includes(query)
+                || (t.third_party_name || '').toLowerCase().includes(query)
+                || paymentName.toLowerCase().includes(query)
+        })
+    const thirdPartyMonthTotalCount = thirdPartyMonthRows.length
+    const thirdPartyMonthTotalValue = thirdPartyMonthRows.reduce((acc, t) => acc + Number(t.amount), 0)
+    const thirdPartyPendingCount = thirdPartyMonthRows.filter(t => (t.third_party_status || 'pending') !== 'paid').length
+    const thirdPartyPaidCount = thirdPartyMonthRows.length - thirdPartyPendingCount
+    const thirdPartyRows = thirdPartyBaseRows
+        .filter(t => {
+            if (thirdPartyFilter === 'all') return true
+            const status = (t.third_party_status || 'pending') === 'paid' ? 'paid' : 'pending'
+            return status === thirdPartyFilter
+        })
+        .sort((a, b) => {
+            if (a.date !== b.date) return b.date.localeCompare(a.date)
+            return (b.created_at || '').localeCompare(a.created_at || '')
+        })
+    const thirdPartyVisibleTotalValue = thirdPartyRows.reduce((acc, t) => acc + Number(t.amount), 0)
 
     const prevInvoice = () => {
         if (invoiceMonth === 1) { setInvoiceMonth(12); setInvoiceYear(y => y - 1) }
@@ -313,6 +390,14 @@ export default function TransactionsPage() {
     const nextInvoice = () => {
         if (invoiceMonth === 12) { setInvoiceMonth(1); setInvoiceYear(y => y + 1) }
         else setInvoiceMonth(m => m + 1)
+    }
+    const prevThirdPartyMonth = () => {
+        if (thirdPartyMonth === 1) { setThirdPartyMonth(12); setThirdPartyYear(y => y - 1) }
+        else setThirdPartyMonth(m => m - 1)
+    }
+    const nextThirdPartyMonth = () => {
+        if (thirdPartyMonth === 12) { setThirdPartyMonth(1); setThirdPartyYear(y => y + 1) }
+        else setThirdPartyMonth(m => m + 1)
     }
 
     const filteredCategories = categories.filter(c =>
@@ -339,7 +424,7 @@ export default function TransactionsPage() {
                     <p>Gerencie suas receitas e despesas com precisão</p>
                 </div>
                 <div style={{ display: 'flex', gap: 12 }}>
-                    {selectedIds.length > 0 && (
+                    {selectedIds.length > 0 && !isThirdPartyOnly && (
                         <button
                             className="btn btn-secondary"
                             onClick={handleBulkDelete}
@@ -365,7 +450,8 @@ export default function TransactionsPage() {
             </header>
 
             {/* View Switching & Main Filters */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 16 }}>
+            <>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <div style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 12, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
                         <button
@@ -382,13 +468,20 @@ export default function TransactionsPage() {
                         >
                             Faturas
                         </button>
+                        <button
+                            className={`btn btn-sm ${viewMode === 'third-party' ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setViewMode('third-party')}
+                            style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                        >
+                            Terceiros
+                        </button>
                     </div>
 
-                    <div className="search-input-wrapper" style={{ position: 'relative', width: 280 }}>
+                    {!isThirdPartyOnly && <div className="search-input-wrapper" style={{ position: 'relative', width: 280 }}>
                         <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
                         <input
                             type="text"
-                            placeholder={viewMode === 'list' ? "Buscar nos lançamentos..." : "Buscar na fatura..."}
+                            placeholder={viewMode === 'list' ? "Buscar nos lancamentos..." : "Buscar na fatura..."}
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             style={{
@@ -401,10 +494,10 @@ export default function TransactionsPage() {
                                 color: 'var(--color-text-primary)'
                             }}
                         />
-                    </div>
+                    </div>}
                 </div>
 
-                {viewMode === 'list' ? (
+                        {viewMode === 'list' ? (
                     <div className="filter-bar" style={{ margin: 0, padding: 4, background: 'var(--color-bg-tertiary)', borderRadius: 12 }}>
                         <button
                             className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
@@ -422,7 +515,7 @@ export default function TransactionsPage() {
                             <TrendingDown size={16} /> Despesas
                         </button>
                     </div>
-                ) : (
+                ) : viewMode === 'invoices' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
                         <button className="btn btn-icon btn-ghost btn-sm" onClick={prevInvoice} style={{ borderRadius: 10 }}><ChevronLeft size={18} /></button>
                         <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, minWidth: 140, textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -430,10 +523,12 @@ export default function TransactionsPage() {
                         </span>
                         <button className="btn btn-icon btn-ghost btn-sm" onClick={nextInvoice} style={{ borderRadius: 10 }}><ChevronRight size={18} /></button>
                     </div>
-                )}
-            </div>
+                ) : (
+                    <div />
+                        )}
+                    </div>
 
-            {viewMode === 'invoices' && (
+                    {viewMode === 'invoices' && (
                 <div style={{ marginBottom: 'var(--space-6)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--color-bg-secondary)', padding: 12, borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
                     <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 4 }}>
                         {cards.map(card => (
@@ -467,10 +562,11 @@ export default function TransactionsPage() {
                         <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--color-text-primary)' }}>{formatCurrency(invoiceTotal)}</div>
                     </div>
                 </div>
-            )}
+                    )}
 
-            {/* Table */}
-            <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
+                    {/* Table */}
+                    {!isThirdPartyOnly && (
+                    <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
                 <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                         <thead className="pro-table-header">
@@ -662,7 +758,201 @@ export default function TransactionsPage() {
                         </tbody>
                     </table>
                 </div>
+                    </div>
+                    )}
+            </>
+
+            {isThirdPartyOnly && (
+            <div id="third-party-expenses" className="card" style={{ marginTop: 0, padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
+                <div style={{ padding: 'var(--space-5) var(--space-6)', borderBottom: '1px solid var(--color-border)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                            <h3 style={{ fontSize: 18, fontWeight: 800, margin: 0 }}>Despesas de Terceiros</h3>
+                            <p style={{ margin: 0, marginTop: 4, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                                Apenas transacoes de terceiros do mes selecionado.
+                            </p>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 12, border: '1px solid var(--color-border)' }}>
+                                <button className="btn btn-icon btn-ghost btn-sm" onClick={prevThirdPartyMonth} style={{ borderRadius: 8 }}>
+                                    <ChevronLeft size={16} />
+                                </button>
+                                <span style={{ minWidth: 140, textAlign: 'center', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    {getMonthName(thirdPartyMonth)} {thirdPartyYear}
+                                </span>
+                                <button className="btn btn-icon btn-ghost btn-sm" onClick={nextThirdPartyMonth} style={{ borderRadius: 8 }}>
+                                    <ChevronRight size={16} />
+                                </button>
+                            </div>
+
+                            <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    Total de terceiros no mes
+                                </div>
+                                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                                    {thirdPartyMonthTotalCount} transacao(oes)
+                                </div>
+                                <div style={{ fontSize: 14, fontWeight: 800, color: '#B45309' }}>
+                                    {formatCurrency(thirdPartyMonthTotalValue)}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                        <div className="search-input-wrapper" style={{ position: 'relative', width: 320, maxWidth: '100%' }}>
+                            <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
+                            <input
+                                type="text"
+                                placeholder="Buscar em terceiros..."
+                                value={thirdPartySearchTerm}
+                                onChange={(e) => setThirdPartySearchTerm(e.target.value)}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 12px 8px 36px',
+                                    borderRadius: 12,
+                                    background: 'var(--color-bg-tertiary)',
+                                    border: '1px solid var(--color-border)',
+                                    fontSize: 13,
+                                    color: 'var(--color-text-primary)'
+                                }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <button
+                                type="button"
+                                onClick={() => setThirdPartyFilter('all')}
+                                style={{
+                                    border: '1px solid var(--color-border)',
+                                    background: thirdPartyFilter === 'all' ? 'var(--color-bg-secondary)' : 'var(--color-bg-tertiary)',
+                                    color: thirdPartyFilter === 'all' ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+                                    borderRadius: 8,
+                                    padding: '4px 10px',
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Todos
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setThirdPartyFilter('pending')}
+                                style={{
+                                    border: '1px solid var(--color-border)',
+                                    background: thirdPartyFilter === 'pending' ? 'rgba(245, 158, 11, 0.15)' : 'var(--color-bg-tertiary)',
+                                    color: thirdPartyFilter === 'pending' ? '#B45309' : 'var(--color-text-tertiary)',
+                                    borderRadius: 8,
+                                    padding: '4px 10px',
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Pendentes ({thirdPartyPendingCount})
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setThirdPartyFilter('paid')}
+                                style={{
+                                    border: '1px solid var(--color-border)',
+                                    background: thirdPartyFilter === 'paid' ? 'rgba(16, 185, 129, 0.15)' : 'var(--color-bg-tertiary)',
+                                    color: thirdPartyFilter === 'paid' ? 'var(--color-income)' : 'var(--color-text-tertiary)',
+                                    borderRadius: 8,
+                                    padding: '4px 10px',
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                Pagos ({thirdPartyPaidCount})
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-text-tertiary)' }}>
+                        Mostrando {thirdPartyRows.length} registro(s) | Total filtrado: {formatCurrency(thirdPartyVisibleTotalValue)}
+                    </div>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+                        <thead className="pro-table-header">
+                            <tr>
+                                <th>Data</th>
+                                <th>Descricao</th>
+                                <th>Terceiro</th>
+                                <th>Pagamento</th>
+                                <th style={{ textAlign: 'right' }}>Valor</th>
+                                <th>Status</th>
+                                <th style={{ width: 160, textAlign: 'center' }}>Acao</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {thirdPartyRows.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--color-text-tertiary)' }}>
+                                        Nenhuma despesa de terceiro encontrada para {getMonthName(thirdPartyMonth)} {thirdPartyYear}.
+                                    </td>
+                                </tr>
+                            ) : (
+                                thirdPartyRows.map((t, index) => {
+                                    const status = (t.third_party_status || 'pending') === 'paid' ? 'paid' : 'pending'
+                                    return (
+                                        <tr key={`third-party-${t.id}`} style={{ background: index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)' }}>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+                                                {formatDate(t.date)}
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', fontWeight: 600 }}>
+                                                {t.description}
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                                {t.third_party_name || '-'}
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                                {t.account_id ? accounts.find(a => a.id === t.account_id)?.name || '-' : (cards.find(c => c.id === t.card_id)?.name || '-')}
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', textAlign: 'right', fontWeight: 700 }}>
+                                                - {formatCurrency(t.amount)}
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    padding: '4px 10px',
+                                                    borderRadius: 999,
+                                                    fontSize: 12,
+                                                    fontWeight: 700,
+                                                    background: status === 'paid' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                                                    color: status === 'paid' ? 'var(--color-income)' : '#D97706',
+                                                }}>
+                                                    {status === 'paid' ? 'Pago' : 'Pendente'}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', textAlign: 'center' }}>
+                                                {status === 'paid' ? (
+                                                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-income)' }}>Ja pago</span>
+                                                ) : (
+                                                    <button
+                                                        className="btn btn-sm btn-primary"
+                                                        onClick={() => handleMarkThirdPartyPaid(t.id)}
+                                                        disabled={markingThirdPartyId === t.id}
+                                                        style={{ borderRadius: 8, padding: '0 12px', height: 32 }}
+                                                    >
+                                                        {markingThirdPartyId === t.id ? 'Salvando...' : 'Marcar pago'}
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    )
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
+            )}
 
             {/* Modal */}
             {showModal && (

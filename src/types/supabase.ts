@@ -526,6 +526,8 @@ export type Database = {
           is_recurring: boolean | null
           notes: string | null
           recurrence_type: string | null
+          third_party_paid_at: string | null
+          third_party_status: string
           third_party_name: string | null
           type: string
           user_id: string
@@ -544,6 +546,8 @@ export type Database = {
           is_recurring?: boolean | null
           notes?: string | null
           recurrence_type?: string | null
+          third_party_paid_at?: string | null
+          third_party_status?: string
           third_party_name?: string | null
           type: string
           user_id: string
@@ -562,6 +566,8 @@ export type Database = {
           is_recurring?: boolean | null
           notes?: string | null
           recurrence_type?: string | null
+          third_party_paid_at?: string | null
+          third_party_status?: string
           third_party_name?: string | null
           type?: string
           user_id?: string

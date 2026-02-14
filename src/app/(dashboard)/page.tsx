@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate, getMonthName, getTodayDateInputValue } from '@/lib/utils'
 import {
@@ -251,18 +252,21 @@ export default function DashboardPage() {
         }
 
         const closingDay = card.closing_day || 31
-        const dueDay = card.due_day || 1
-        const dueMonthOffset = dueDay <= closingDay ? 1 : 0
-        const periodEnd = new Date(year, month - 1 - dueMonthOffset, closingDay)
-        const periodStart = new Date(year, month - 2 - dueMonthOffset, closingDay + 1)
+        const periodEnd = new Date(year, month - 1, closingDay)
+        const periodStart = new Date(year, month - 2, closingDay + 1)
         const transactionDate = new Date(t.date + 'T00:00:00')
         return transactionDate >= periodStart && transactionDate <= periodEnd
     })
     const householdMonthTx = monthTx.filter(t => !t.is_third_party)
+    const thirdPartyMonthTx = monthTx.filter(t => t.type === 'expense' && t.is_third_party)
+    const thirdPartyPendingTx = thirdPartyMonthTx.filter(t => (t.third_party_status || 'pending') !== 'paid')
+    const thirdPartyPaidTx = thirdPartyMonthTx.filter(t => (t.third_party_status || 'pending') === 'paid')
 
     const totalIncome = householdMonthTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
     const totalExpense = householdMonthTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
     const balance = totalIncome - totalExpense
+    const thirdPartyPendingTotal = thirdPartyPendingTx.reduce((s, t) => s + Number(t.amount), 0)
+    const thirdPartyPaidTotal = thirdPartyPaidTx.reduce((s, t) => s + Number(t.amount), 0)
 
     // Expenses by category for pie chart
     const expensesByCat = householdMonthTx
@@ -498,6 +502,28 @@ export default function DashboardPage() {
                             </div>
                             <div className="stat-card-value" style={{ fontSize: 24, fontWeight: 800 }}>{householdMonthTx.length}</div>
                         </div>
+
+                        <Link
+                            href={`/transactions?view=third-party&thirdParty=all&month=${month}&year=${year}`}
+                            className="stat-card stagger-item"
+                            style={{ textDecoration: 'none', color: 'inherit', display: 'block', cursor: 'pointer' }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                <div style={{ background: 'rgba(245, 158, 11, 0.12)', padding: 8, borderRadius: 10 }}>
+                                    <ArrowUpRight size={20} style={{ color: '#D97706' }} />
+                                </div>
+                                <div className="stat-card-label" style={{ margin: 0 }}>Terceiros pendentes</div>
+                            </div>
+                            <div className="stat-card-value" style={{ color: thirdPartyPendingTotal > 0 ? '#B45309' : 'var(--color-text-primary)', fontSize: 24, fontWeight: 800 }}>
+                                {formatCurrency(thirdPartyPendingTotal)}
+                            </div>
+                            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                                {thirdPartyPendingTx.length} pendente(s) | {thirdPartyPaidTx.length} pago(s)
+                            </div>
+                            <div style={{ marginTop: 2, fontSize: 11, color: 'var(--color-text-muted)' }}>
+                                Recebido no periodo: {formatCurrency(thirdPartyPaidTotal)}
+                            </div>
+                        </Link>
                     </div>
 
                     {/* Charts */}
