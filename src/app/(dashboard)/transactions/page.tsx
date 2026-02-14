@@ -509,7 +509,7 @@ export default function TransactionsPage() {
                                         </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                             <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>{t.description}</div>
-                                            {(t.installment_id || (t.is_recurring && (t.recurrence_type === 'installment' || /\(\d+\/\d+\)/.test(t.description)))) && (
+                                            {(t.is_recurring && (t.recurrence_type === 'installment' || /\(\d+\/\d+\)/.test(t.description))) && (
                                                 <span style={{
                                                     fontSize: 10,
                                                     padding: '2px 8px',
