@@ -17,6 +17,7 @@ const navItems = [
     { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { href: '/transactions', icon: ArrowLeftRight, label: 'Transações' },
     { label: 'Gerenciar', section: 'gerenciar' },
+    { href: '/fixed-expenses', icon: PieChart, label: 'Despesas Fixas' },
     { href: '/cards', icon: CreditCard, label: 'Cartões' },
     { href: '/accounts', icon: Wallet, label: 'Contas' },
     { href: '/categories', icon: FolderOpen, label: 'Categorias' },

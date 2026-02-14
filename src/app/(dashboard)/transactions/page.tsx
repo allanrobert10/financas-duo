@@ -43,6 +43,8 @@ export default function TransactionsPage() {
         category_id: '', account_id: '', card_id: '', date: getTodayDateInputValue(),
         notes: '', is_recurring: false, recurrence_type: '' as string,
         installments_count: 2,
+        is_third_party: false,
+        third_party_name: '',
         tag_ids: [] as string[],
     })
 
@@ -98,6 +100,8 @@ export default function TransactionsPage() {
             description: '', amount: '', type: 'expense', category_id: '',
             account_id: '', card_id: '', date: getTodayDateInputValue(),
             notes: '', is_recurring: false, recurrence_type: '', installments_count: 2,
+            is_third_party: false,
+            third_party_name: '',
             tag_ids: [],
         })
         setShowModal(true)
@@ -111,9 +115,19 @@ export default function TransactionsPage() {
             card_id: tx.card_id || '', date: tx.date, notes: tx.notes || '',
             is_recurring: tx.is_recurring || false, recurrence_type: tx.recurrence_type || '',
             installments_count: 2,
+            is_third_party: !!tx.is_third_party,
+            third_party_name: tx.third_party_name || '',
             tag_ids: (tx as any).transaction_tags?.map((tt: any) => tt.tag_id) || [],
         })
         setShowModal(true)
+    }
+
+    function getSaveErrorMessage(error: unknown): string {
+        const rawMessage = (error as any)?.message || ''
+        if (/is_third_party|third_party_name|schema cache|column .* does not exist/i.test(rawMessage)) {
+            return 'Seu banco ainda nao tem os campos de terceiros. Rode a migration no Supabase e tente novamente.'
+        }
+        return rawMessage || 'Erro ao salvar transacao'
     }
 
     async function handleSave(e: React.FormEvent) {
@@ -131,13 +145,16 @@ export default function TransactionsPage() {
             notes: form.notes || null,
             is_recurring: form.is_recurring,
             recurrence_type: form.is_recurring ? form.recurrence_type : null,
+            is_third_party: form.is_third_party,
+            third_party_name: form.is_third_party ? (form.third_party_name.trim() || null) : null,
             household_id: householdId,
             user_id: userId,
         }
 
         try {
             if (editing) {
-                await supabase.from('transactions').update(basePayload).eq('id', editing.id)
+                const { error: updateError } = await supabase.from('transactions').update(basePayload).eq('id', editing.id)
+                if (updateError) throw updateError
             } else {
                 if (form.is_recurring && form.recurrence_type === 'installment' && form.installments_count > 1) {
                     // Generate installments
@@ -161,6 +178,8 @@ export default function TransactionsPage() {
                         notes: form.notes || null,
                         is_recurring: true,
                         recurrence_type: 'monthly', // Using 'monthly' as standard recurrence type
+                        is_third_party: form.is_third_party,
+                        third_party_name: form.is_third_party ? (form.third_party_name.trim() || null) : null,
                         household_id: householdId,
                         user_id: userId
                     }))
@@ -173,7 +192,8 @@ export default function TransactionsPage() {
                             transaction_id: tx.id,
                             tag_id: tagId
                         })))
-                        await supabase.from('transaction_tags').insert(tagLinks)
+                        const { error: tagError } = await supabase.from('transaction_tags').insert(tagLinks)
+                        if (tagError) throw tagError
                     }
                 } else {
                     // Standard single insert
@@ -185,7 +205,8 @@ export default function TransactionsPage() {
                             transaction_id: data.id,
                             tag_id: tagId
                         }))
-                        await supabase.from('transaction_tags').insert(tagLinks)
+                        const { error: tagError } = await supabase.from('transaction_tags').insert(tagLinks)
+                        if (tagError) throw tagError
                     }
                 }
             }
@@ -193,13 +214,15 @@ export default function TransactionsPage() {
             // Edit mode tag adjustment
             if (editing) {
                 // Remove old, add new
-                await supabase.from('transaction_tags').delete().eq('transaction_id', editing.id)
+                const { error: deleteTagsError } = await supabase.from('transaction_tags').delete().eq('transaction_id', editing.id)
+                if (deleteTagsError) throw deleteTagsError
                 if (form.tag_ids.length > 0) {
                     const tagLinks = form.tag_ids.map(tagId => ({
                         transaction_id: editing.id,
                         tag_id: tagId
                     }))
-                    await supabase.from('transaction_tags').insert(tagLinks)
+                    const { error: insertTagsError } = await supabase.from('transaction_tags').insert(tagLinks)
+                    if (insertTagsError) throw insertTagsError
                 }
             }
 
@@ -208,7 +231,7 @@ export default function TransactionsPage() {
             loadAll()
         } catch (error) {
             console.error(error)
-            alert('Erro ao salvar transação')
+            alert(getSaveErrorMessage(error))
             setSaving(false)
         }
     }
@@ -275,7 +298,11 @@ export default function TransactionsPage() {
             const periodStart = new Date(invoiceYear, invoiceMonth - 2, closingDay + 1)
             const transactionDate = new Date(t.date + 'T00:00:00')
             return transactionDate >= periodStart && transactionDate <= periodEnd
-        })).filter(t => t.description.toLowerCase().includes(searchTerm.toLowerCase()))
+        })).filter(t => {
+            const query = searchTerm.toLowerCase()
+            return t.description.toLowerCase().includes(query)
+                || (t.third_party_name || '').toLowerCase().includes(query)
+        })
 
     const invoiceTotal = viewMode === 'invoices' ? filteredTx.reduce((acc, t) => acc + t.amount, 0) : 0
 
@@ -523,6 +550,22 @@ export default function TransactionsPage() {
                                                     Parcelado
                                                 </span>
                                             )}
+                                            {t.is_third_party && (
+                                                <span style={{
+                                                    fontSize: 10,
+                                                    padding: '2px 8px',
+                                                    marginTop: 4,
+                                                    marginLeft: 6,
+                                                    borderRadius: 'var(--radius-full)',
+                                                    background: 'rgba(245, 158, 11, 0.12)',
+                                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                                    color: '#92400E',
+                                                    display: 'inline-block',
+                                                    fontWeight: 700
+                                                }}>
+                                                    Terceiros{t.third_party_name ? `: ${t.third_party_name}` : ''}
+                                                </span>
+                                            )}
                                         </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                             <span style={{
@@ -758,6 +801,37 @@ export default function TransactionsPage() {
                                                         onChange={e => setForm(f => ({ ...f, installments_count: parseInt(e.target.value) || 2 }))} />
                                                 </div>
                                             )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div style={{ background: 'rgba(245, 158, 11, 0.08)', padding: 16, borderRadius: 16, border: '1px solid rgba(245, 158, 11, 0.25)', marginBottom: 20 }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={form.is_third_party}
+                                            onChange={e => setForm(f => ({
+                                                ...f,
+                                                is_third_party: e.target.checked,
+                                                third_party_name: e.target.checked ? f.third_party_name : '',
+                                            }))}
+                                            style={{ width: 18, height: 18, borderRadius: 4, cursor: 'pointer' }}
+                                        />
+                                        <span style={{ fontWeight: 600, fontSize: 14 }}>Lancamento de terceiros?</span>
+                                    </label>
+                                    {form.is_third_party && (
+                                        <div className="input-group" style={{ marginTop: 12, marginBottom: 0 }}>
+                                            <label className="input-label">Quem vai te reembolsar?</label>
+                                            <input
+                                                className="input"
+                                                value={form.third_party_name}
+                                                onChange={e => setForm(f => ({ ...f, third_party_name: e.target.value }))}
+                                                placeholder="Ex: Mae, Sogra, Thiago..."
+                                                required={form.is_third_party}
+                                            />
+                                            <p style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 6 }}>
+                                                Essa transacao continua na fatura/cartao, mas nao entra no saldo da familia.
+                                            </p>
                                         </div>
                                     )}
                                 </div>

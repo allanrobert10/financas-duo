@@ -197,6 +197,154 @@ export type Database = {
           },
         ]
       }
+      fixed_expense_occurrences: {
+        Row: {
+          amount: number
+          created_at: string | null
+          due_date: string
+          fixed_expense_id: string
+          household_id: string
+          id: string
+          month: number
+          paid_at: string | null
+          status: string
+          transaction_id: string | null
+          year: number
+        }
+        Insert: {
+          amount: number
+          created_at?: string | null
+          due_date: string
+          fixed_expense_id: string
+          household_id: string
+          id?: string
+          month: number
+          paid_at?: string | null
+          status?: string
+          transaction_id?: string | null
+          year: number
+        }
+        Update: {
+          amount?: number
+          created_at?: string | null
+          due_date?: string
+          fixed_expense_id?: string
+          household_id?: string
+          id?: string
+          month?: number
+          paid_at?: string | null
+          status?: string
+          transaction_id?: string | null
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixed_expense_occurrences_fixed_expense_id_fkey"
+            columns: ["fixed_expense_id"]
+            isOneToOne: false
+            referencedRelation: "fixed_expenses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expense_occurrences_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expense_occurrences_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fixed_expenses: {
+        Row: {
+          account_id: string | null
+          amount: number
+          card_id: string | null
+          category_id: string
+          created_at: string | null
+          description: string
+          due_day: number
+          household_id: string
+          id: string
+          is_active: boolean
+          notes: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          account_id?: string | null
+          amount: number
+          card_id?: string | null
+          category_id: string
+          created_at?: string | null
+          description: string
+          due_day: number
+          household_id: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          account_id?: string | null
+          amount?: number
+          card_id?: string | null
+          category_id?: string
+          created_at?: string | null
+          description?: string
+          due_day?: number
+          household_id?: string
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fixed_expenses_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expenses_card_id_fkey"
+            columns: ["card_id"]
+            isOneToOne: false
+            referencedRelation: "cards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expenses_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expenses_household_id_fkey"
+            columns: ["household_id"]
+            isOneToOne: false
+            referencedRelation: "households"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fixed_expenses_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       household_invites: {
         Row: {
           created_at: string | null
@@ -374,9 +522,11 @@ export type Database = {
           description: string
           household_id: string
           id: string
+          is_third_party: boolean
           is_recurring: boolean | null
           notes: string | null
           recurrence_type: string | null
+          third_party_name: string | null
           type: string
           user_id: string
         }
@@ -390,9 +540,11 @@ export type Database = {
           description: string
           household_id: string
           id?: string
+          is_third_party?: boolean
           is_recurring?: boolean | null
           notes?: string | null
           recurrence_type?: string | null
+          third_party_name?: string | null
           type: string
           user_id: string
         }
@@ -406,9 +558,11 @@ export type Database = {
           description?: string
           household_id?: string
           id?: string
+          is_third_party?: boolean
           is_recurring?: boolean | null
           notes?: string | null
           recurrence_type?: string | null
+          third_party_name?: string | null
           type?: string
           user_id?: string
         }

@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { Profile } from '@/types/database'
 import { User, Save, Check, Mail, UserPlus, Crown, X, Copy, Users, Lock, Eye, EyeOff, Trash2, FileSpreadsheet, Upload, Download } from 'lucide-react'
 import { generateTemplate, exportTransactions, parseImport, type TransactionImportData } from '@/utils/excel'
+import { addMonths } from 'date-fns'
+import { parseDateInputValue, toDateInputValue } from '@/lib/utils'
 import { getAppUrl } from '@/lib/url'
 import { DeleteAccountModal } from '@/components/DeleteAccountModal'
 
@@ -76,6 +78,15 @@ export default function SettingsPage() {
     const isPwStrong = pwScore >= 4
 
     useEffect(() => { loadProfile() }, [])
+
+    useEffect(() => {
+        if (!importing) return
+        const previousOverflow = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => {
+            document.body.style.overflow = previousOverflow
+        }
+    }, [importing])
 
     async function loadProfile() {
         const { data: { user } } = await supabase.auth.getUser()
@@ -317,32 +328,81 @@ export default function SettingsPage() {
                 .select('id, name')
                 .eq('household_id', profile.household_id)
 
-            const categoryMap = new Map(categories?.map(c => [c.name.toLowerCase(), c.id]))
-            const accountMap = new Map(accounts?.map(a => [a.name.toLowerCase(), a.id]))
-            const cardMap = new Map(cards?.map(c => [c.name.toLowerCase(), c.id]))
+            const normalizeKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ')
+
+            const categoryMap = new Map(categories?.map(c => [normalizeKey(c.name), c.id]))
+            const accountMap = new Map(accounts?.map(a => [normalizeKey(a.name), a.id]))
+            const cardMap = new Map(cards?.map(c => [normalizeKey(c.name), c.id]))
 
             const { data: existingTags } = await supabase
                 .from('tags')
                 .select('id, name')
                 .eq('household_id', profile.household_id)
-            const tagMap = new Map(existingTags?.map(tag => [tag.name.toLowerCase(), tag.id]))
+            const tagMap = new Map(existingTags?.map(tag => [normalizeKey(tag.name), tag.id]))
 
             let successCount = 0
             let errors = 0
+
+            type PlannedImportTransaction = {
+                description: string
+                date: string
+                isRecurring: boolean
+                recurrenceType: 'monthly' | null
+            }
+
+            const buildPlannedTransactions = (t: TransactionImportData): PlannedImportTransaction[] => {
+                const defaultTransaction: PlannedImportTransaction = {
+                    description: t.description,
+                    date: t.date,
+                    isRecurring: false,
+                    recurrenceType: null,
+                }
+
+                if (!t.isInstallment || !t.installmentCurrent || !t.installmentTotal) {
+                    return [defaultTransaction]
+                }
+
+                const currentInstallment = t.installmentCurrent
+                const totalInstallments = t.installmentTotal
+                const baseDescription = (t.installmentBaseDescription || t.description.replace(/\s+\d{1,2}\/\d{1,2}$/, '')).trim()
+
+                // If imported line is already the last installment (10/10), keep it as regular transaction.
+                if (currentInstallment >= totalInstallments) {
+                    return [defaultTransaction]
+                }
+
+                const startDate = parseDateInputValue(t.date)
+                const plannedTransactions: PlannedImportTransaction[] = []
+                for (let installment = currentInstallment; installment <= totalInstallments; installment++) {
+                    const installmentDate = toDateInputValue(addMonths(startDate, installment - currentInstallment))
+                    const suffix = `${String(installment).padStart(2, '0')}/${String(totalInstallments).padStart(2, '0')}`
+                    const installmentDescription = baseDescription ? `${baseDescription} ${suffix}` : suffix
+                    const isLastInstallment = installment === totalInstallments
+
+                    plannedTransactions.push({
+                        description: installmentDescription,
+                        date: installmentDate,
+                        isRecurring: !isLastInstallment,
+                        recurrenceType: !isLastInstallment ? 'monthly' : null,
+                    })
+                }
+
+                return plannedTransactions
+            }
 
             for (const t of transactions) {
                 let accountId = null
                 let cardId = null
 
                 if (t.paymentMethod === 'conta') {
-                    accountId = accountMap.get(t.paymentName.toLowerCase())
+                    accountId = accountMap.get(normalizeKey(t.paymentName))
                     if (!accountId) {
                         console.warn(`Conta não encontrada: ${t.paymentName}`)
                         errors++
                         continue
                     }
                 } else {
-                    cardId = cardMap.get(t.paymentName.toLowerCase())
+                    cardId = cardMap.get(normalizeKey(t.paymentName))
                     if (!cardId) {
                         console.warn(`Cartão não encontrado: ${t.paymentName}`)
                         errors++
@@ -351,7 +411,7 @@ export default function SettingsPage() {
                 }
 
                 // Find Category
-                let categoryId = categoryMap.get(t.category.toLowerCase())
+                let categoryId = categoryMap.get(normalizeKey(t.category))
                 if (!categoryId) {
                     // Create Category if not exists
                     const { data: newCat, error: catError } = await supabase
@@ -367,7 +427,7 @@ export default function SettingsPage() {
 
                     if (newCat) {
                         categoryId = newCat.id
-                        categoryMap.set(t.category.toLowerCase(), newCat.id)
+                        categoryMap.set(normalizeKey(t.category), newCat.id)
                     } else {
                         console.warn(`Erro ao criar categoria: ${t.category}`)
                         errors++
@@ -375,57 +435,70 @@ export default function SettingsPage() {
                     }
                 }
 
-                // Insert Transaction
-                const { data: newTransaction, error: insertError } = await supabase.from('transactions').insert({
-                    description: t.description,
-                    amount: t.amount,
-                    type: t.type,
-                    date: t.date, // Format YYYY-MM-DD
-                    category_id: categoryId,
-                    account_id: accountId,
-                    card_id: cardId,
-                    household_id: profile.household_id,
-                    user_id: profile.id,
-                    notes: t.notes || '',
-                    is_recurring: t.isInstallment || false,
-                    recurrence_type: t.isInstallment ? 'installment' : null
-                }).select().single()
+                const plannedTransactions = buildPlannedTransactions(t)
 
-                if (insertError) {
-                    console.error('Erro ao inserir:', insertError)
-                    errors++
-                } else if (newTransaction) {
+                const tagIdsToLink: string[] = []
+                if (t.tags) {
+                    const tagNames = t.tags.split(',').map(name => name.trim()).filter(Boolean)
+
+                    for (const tagName of tagNames) {
+                        let tagId = tagMap.get(normalizeKey(tagName))
+                        if (!tagId) {
+                            // Create missing tag
+                            const { data: newTag } = await supabase
+                                .from('tags')
+                                .insert({ name: tagName, household_id: profile.household_id, color: '#8B5CF6' })
+                                .select()
+                                .single()
+
+                            if (newTag) {
+                                tagId = newTag.id
+                                tagMap.set(normalizeKey(tagName), tagId)
+                            }
+                        }
+                        if (tagId) tagIdsToLink.push(tagId)
+                    }
+                }
+
+                for (const planned of plannedTransactions) {
+                    // Insert transaction (single or generated installments)
+                    const { data: newTransaction, error: insertError } = await supabase.from('transactions').insert({
+                        description: planned.description,
+                        amount: t.amount,
+                        type: t.type,
+                        date: planned.date,
+                        category_id: categoryId,
+                        account_id: accountId,
+                        card_id: cardId,
+                        household_id: profile.household_id,
+                        user_id: profile.id,
+                        notes: t.notes || '',
+                        is_recurring: planned.isRecurring,
+                        recurrence_type: planned.recurrenceType,
+                    }).select().single()
+
+                    if (insertError) {
+                        console.error('Erro ao inserir:', insertError)
+                        errors++
+                        continue
+                    }
+
+                    if (!newTransaction) {
+                        errors++
+                        continue
+                    }
+
                     successCount++
 
-                    // Handle tags link
-                    if (t.tags) {
-                        const tagNames = t.tags.split(',').map(name => name.trim()).filter(Boolean)
-                        const tagIdsToLink: string[] = []
-
-                        for (const tagName of tagNames) {
-                            let tagId = tagMap.get(tagName.toLowerCase())
-                            if (!tagId) {
-                                // Create missing tag
-                                const { data: newTag } = await supabase
-                                    .from('tags')
-                                    .insert({ name: tagName, household_id: profile.household_id, color: '#8B5CF6' })
-                                    .select()
-                                    .single()
-
-                                if (newTag) {
-                                    tagId = newTag.id
-                                    tagMap.set(tagName.toLowerCase(), tagId)
-                                }
-                            }
-                            if (tagId) tagIdsToLink.push(tagId)
-                        }
-
-                        if (tagIdsToLink.length > 0) {
-                            const tagLinks = tagIdsToLink.map(tagId => ({
-                                transaction_id: newTransaction.id,
-                                tag_id: tagId
-                            }))
-                            await supabase.from('transaction_tags').insert(tagLinks)
+                    if (tagIdsToLink.length > 0) {
+                        const tagLinks = tagIdsToLink.map(tagId => ({
+                            transaction_id: newTransaction.id,
+                            tag_id: tagId
+                        }))
+                        const { error: tagInsertError } = await supabase.from('transaction_tags').insert(tagLinks)
+                        if (tagInsertError) {
+                            console.error('Erro ao vincular tags:', tagInsertError)
+                            errors++
                         }
                     }
                 }
@@ -848,6 +921,22 @@ export default function SettingsPage() {
                 }}
                 isLoading={saving}
             />
+
+            {importing && (
+                <div className="modal-overlay" style={{ zIndex: 2000 }}>
+                    <div className="glass-card" style={{ width: 'min(460px, calc(100% - 32px))', textAlign: 'center', padding: 28 }}>
+                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+                            <span className="spinner spinner-dark" style={{ width: 24, height: 24, borderWidth: 3 }} />
+                        </div>
+                        <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginBottom: 8 }}>
+                            Importando planilha...
+                        </h3>
+                        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                            Aguarde a importacao terminar. A tela ficara bloqueada durante o processamento.
+                        </p>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

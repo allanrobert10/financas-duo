@@ -35,6 +35,15 @@ export default function DashboardPage() {
     const todayDate = getTodayDateInputValue()
     const [month, setMonth] = useState(now.getMonth() + 1)
     const [year, setYear] = useState(now.getFullYear())
+    const [showPeriodPicker, setShowPeriodPicker] = useState(false)
+    const [pickerMonth, setPickerMonth] = useState(now.getMonth() + 1)
+    const [pickerYear, setPickerYear] = useState(now.getFullYear())
+
+    const currentYear = now.getFullYear()
+    const minYear = Math.min(currentYear - 10, year - 5)
+    const maxYear = Math.max(currentYear + 10, year + 5)
+    const yearOptions = Array.from({ length: maxYear - minYear + 1 }, (_, i) => minYear + i)
+    const isCurrentPeriod = month === now.getMonth() + 1 && year === now.getFullYear()
 
     useEffect(() => {
         loadData()
@@ -197,30 +206,66 @@ export default function DashboardPage() {
         if (month === 12) { setMonth(1); setYear(y => y + 1) }
         else setMonth(m => m + 1)
     }
-
-    // Current month transactions (Respecting credit card cycles)
-    const monthTx = transactions.filter(t => {
-        if (t.card_id) {
-            const card = cards.find(c => c.id === t.card_id)
-            if (!card) return false
-            const closingDay = card.closing_day || 31
-            const periodEnd = new Date(year, month - 1, closingDay)
-            const periodStart = new Date(year, month - 2, closingDay + 1)
-            const transactionDate = new Date(t.date + 'T00:00:00')
-            return transactionDate >= periodStart && transactionDate <= periodEnd
-        } else {
-            // Cash transactions follow calendar month
-            const [tYear, tMonth] = t.date.split('-').map(Number)
-            return tMonth === month && tYear === year
+    function togglePeriodPicker() {
+        if (!showPeriodPicker) {
+            setPickerMonth(month)
+            setPickerYear(year)
         }
-    })
+        setShowPeriodPicker(v => !v)
+    }
+    function applySelectedPeriod() {
+        setMonth(pickerMonth)
+        setYear(pickerYear)
+        setShowPeriodPicker(false)
+    }
+    function goToCurrentMonth() {
+        const today = new Date()
+        setMonth(today.getMonth() + 1)
+        setYear(today.getFullYear())
+        setShowPeriodPicker(false)
+    }
 
-    const totalIncome = monthTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-    const totalExpense = monthTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+    // Current month transactions:
+    // - Income always follows calendar month.
+    // - Card expenses follow invoice cycle.
+    // - Non-card expenses follow calendar month.
+    const monthTx = transactions.filter(t => {
+        const [tYear, tMonth] = t.date.split('-').map(Number)
+        const isCalendarMonth = tMonth === month && tYear === year
+
+        if (t.type === 'income') {
+            return isCalendarMonth
+        }
+
+        if (t.type !== 'expense') {
+            return isCalendarMonth
+        }
+
+        if (!t.card_id) {
+            return isCalendarMonth
+        }
+
+        const card = cards.find(c => c.id === t.card_id)
+        if (!card) {
+            return isCalendarMonth
+        }
+
+        const closingDay = card.closing_day || 31
+        const dueDay = card.due_day || 1
+        const dueMonthOffset = dueDay <= closingDay ? 1 : 0
+        const periodEnd = new Date(year, month - 1 - dueMonthOffset, closingDay)
+        const periodStart = new Date(year, month - 2 - dueMonthOffset, closingDay + 1)
+        const transactionDate = new Date(t.date + 'T00:00:00')
+        return transactionDate >= periodStart && transactionDate <= periodEnd
+    })
+    const householdMonthTx = monthTx.filter(t => !t.is_third_party)
+
+    const totalIncome = householdMonthTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+    const totalExpense = householdMonthTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
     const balance = totalIncome - totalExpense
 
     // Expenses by category for pie chart
-    const expensesByCat = monthTx
+    const expensesByCat = householdMonthTx
         .filter(t => t.type === 'expense' && t.category_id)
         .reduce((acc, t) => {
             const cat = categories.find(c => c.id === t.category_id)
@@ -237,8 +282,8 @@ export default function DashboardPage() {
     const barData = barPeriod === 'today' ? [
         {
             name: 'Hoje',
-            receitas: transactions.filter(t => t.type === 'income' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
-            despesas: transactions.filter(t => t.type === 'expense' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
+            receitas: transactions.filter(t => t.type === 'income' && t.date === todayDate && !t.is_third_party).reduce((s, t) => s + t.amount, 0),
+            despesas: transactions.filter(t => t.type === 'expense' && t.date === todayDate && !t.is_third_party).reduce((s, t) => s + t.amount, 0),
         }
     ] : Array.from({ length: barPeriod as number }, (_, i) => {
         let m = month - ((barPeriod as number) - 1 - i)
@@ -255,7 +300,7 @@ export default function DashboardPage() {
 
         const mTx = transactions.filter(t => {
             const [tYear, tMonth] = t.date.split('-').map(Number)
-            return tMonth === m && tYear === y
+            return tMonth === m && tYear === y && !t.is_third_party
         })
 
         return {
@@ -266,6 +311,7 @@ export default function DashboardPage() {
     })
 
     const recentTx = transactions
+        .filter(t => !t.is_third_party)
         .filter(t => t.description.toLowerCase().includes(searchTermRecent.toLowerCase()))
         .slice(0, 8)
 
@@ -300,12 +346,100 @@ export default function DashboardPage() {
                         </button>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--color-bg-tertiary)', padding: '6px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--color-bg-tertiary)', padding: '6px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
                         <button className="btn btn-icon btn-ghost btn-sm" onClick={prevMonth} style={{ borderRadius: 10 }}><ChevronLeft size={18} /></button>
-                        <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, minWidth: 140, textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        <button
+                            type="button"
+                            onClick={togglePeriodPicker}
+                            style={{
+                                fontFamily: 'var(--font-display)',
+                                fontWeight: 700,
+                                fontSize: 13,
+                                minWidth: 140,
+                                textAlign: 'center',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.05em',
+                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--color-text-primary)',
+                                cursor: 'pointer',
+                                padding: '6px 10px',
+                                borderRadius: 10,
+                            }}
+                            title="Selecionar mÃªs e ano"
+                        >
                             {getMonthName(month)} {year}
-                        </span>
+                        </button>
                         <button className="btn btn-icon btn-ghost btn-sm" onClick={nextMonth} style={{ borderRadius: 10 }}><ChevronRight size={18} /></button>
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={goToCurrentMonth}
+                            disabled={isCurrentPeriod}
+                            style={{ borderRadius: 10, padding: '0 12px', fontWeight: 700 }}
+                        >
+                            Hoje
+                        </button>
+
+                        {showPeriodPicker && (
+                            <div style={{
+                                position: 'absolute',
+                                top: 'calc(100% + 8px)',
+                                right: 0,
+                                width: 280,
+                                zIndex: 30,
+                                background: 'var(--color-bg-secondary)',
+                                border: '1px solid var(--color-border)',
+                                borderRadius: 12,
+                                boxShadow: 'var(--shadow-lg)',
+                                padding: 12,
+                            }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                    <div>
+                                        <label className="input-label" style={{ fontSize: 11, marginBottom: 6 }}>Mês</label>
+                                        <select
+                                            className="input select"
+                                            value={pickerMonth}
+                                            onChange={(e) => setPickerMonth(Number(e.target.value))}
+                                        >
+                                            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                                                <option key={m} value={m}>{getMonthName(m)}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="input-label" style={{ fontSize: 11, marginBottom: 6 }}>Ano</label>
+                                        <select
+                                            className="input select"
+                                            value={pickerYear}
+                                            onChange={(e) => setPickerYear(Number(e.target.value))}
+                                        >
+                                            {yearOptions.map(y => (
+                                                <option key={y} value={y}>{y}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                                    <button
+                                        type="button"
+                                        className="btn btn-sm btn-ghost"
+                                        onClick={() => setShowPeriodPicker(false)}
+                                        style={{ borderRadius: 8 }}
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-sm btn-primary"
+                                        onClick={applySelectedPeriod}
+                                        style={{ borderRadius: 8 }}
+                                    >
+                                        Aplicar
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {activeTab === 'budgets' && (
@@ -362,7 +496,7 @@ export default function DashboardPage() {
                                 </div>
                                 <div className="stat-card-label" style={{ margin: 0 }}>Transações</div>
                             </div>
-                            <div className="stat-card-value" style={{ fontSize: 24, fontWeight: 800 }}>{monthTx.length}</div>
+                            <div className="stat-card-value" style={{ fontSize: 24, fontWeight: 800 }}>{householdMonthTx.length}</div>
                         </div>
                     </div>
 
@@ -592,7 +726,7 @@ export default function DashboardPage() {
                     {(() => {
                         // Calculate specific spending for budgets tab
                         const budgetSpending: Record<string, number> = {}
-                        monthTx.filter(t => t.type === 'expense' && t.category_id).forEach(tx => {
+                        householdMonthTx.filter(t => t.type === 'expense' && t.category_id).forEach(tx => {
                             budgetSpending[tx.category_id!] = (budgetSpending[tx.category_id!] || 0) + tx.amount
                         })
 
