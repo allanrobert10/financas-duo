@@ -40,6 +40,33 @@ export interface FixedExpenseImportData {
     isActive?: boolean;
 }
 
+export interface ThirdPartyImportData {
+    date: string;
+    description: string;
+    thirdPartyName: string;
+    amount: number;
+    category: string;
+    paymentMethod: 'conta' | 'cartao';
+    paymentName: string;
+    status?: 'pending' | 'paid';
+    notes?: string;
+}
+
+export interface InvoiceExportRow {
+    date: string;
+    cardName: string;
+    description: string;
+    category: string;
+    type: 'income' | 'expense';
+    amount: number;
+}
+
+export interface InvoiceSummaryRow {
+    cardName: string;
+    transactionsCount: number;
+    total: number;
+}
+
 const HEADERS = [
     'Data (DD/MM/AAAA)',
     'Descrição',
@@ -73,6 +100,18 @@ const FIXED_EXPENSE_HEADERS = [
     'Nome (Conta/Cartao)',
     'Observacoes',
     'Status (Ativo/Inativo)'
+];
+
+const THIRD_PARTY_HEADERS = [
+    'Data (DD/MM/AAAA)',
+    'Descricao',
+    'Terceiro',
+    'Valor',
+    'Categoria',
+    'Meio (Conta/Cartao)',
+    'Nome (Conta/Cartao)',
+    'Status (Pendente/Pago)',
+    'Observacoes',
 ];
 
 export const generateTemplate = () => {
@@ -159,6 +198,30 @@ export const generateFixedExpensesTemplate = () => {
 
     XLSX.utils.book_append_sheet(wb, ws, 'DespesasFixas');
     XLSX.writeFile(wb, 'modelo_importacao_despesas_fixas.xlsx');
+};
+
+export const generateThirdPartyTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+        THIRD_PARTY_HEADERS,
+        ['02/01/2026', 'DF Solucoes 10/10', 'Corina', 444.0, 'Terceiros', 'Cartao', 'Ourocard Allan', 'Pendente', 'Reembolso aguardando'],
+        ['15/01/2026', 'Consulta pediatra', 'Clara', 280.5, 'Saude', 'Conta', 'Banco Principal', 'Pago', 'Pago no mesmo dia'],
+    ]);
+
+    ws['!cols'] = [
+        { wch: 16 }, // Data
+        { wch: 32 }, // Descricao
+        { wch: 22 }, // Terceiro
+        { wch: 14 }, // Valor
+        { wch: 22 }, // Categoria
+        { wch: 22 }, // Meio
+        { wch: 24 }, // Nome
+        { wch: 24 }, // Status
+        { wch: 30 }, // Observacoes
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Terceiros');
+    XLSX.writeFile(wb, 'modelo_importacao_terceiros.xlsx');
 };
 
 export const parseImport = async (file: File): Promise<TransactionImportData[]> => {
@@ -429,6 +492,103 @@ export const parseFixedExpensesImport = async (file: File): Promise<FixedExpense
     });
 };
 
+export const parseThirdPartyImport = async (file: File): Promise<ThirdPartyImportData[]> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            try {
+                const data = e.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                if (jsonData.length > 0) jsonData.shift(); // header
+
+                const items: ThirdPartyImportData[] = jsonData
+                    .filter((row: any) => row.length > 0 && row[0])
+                    .map((row: any) => {
+                        const dateRaw = row[0];
+                        const description = row[1]?.toString().trim();
+                        const thirdPartyName = row[2]?.toString().trim();
+                        const amountRaw = row[3];
+                        const category = row[4]?.toString().trim();
+                        const paymentMethodRaw = row[5]?.toString().toLowerCase().trim();
+                        const paymentName = row[6]?.toString().trim();
+                        const statusRaw = row[7]?.toString().toLowerCase().trim();
+                        const notes = row[8]?.toString().trim();
+
+                        let date = '';
+                        if (typeof dateRaw === 'number') {
+                            const parsedExcelDate = XLSX.SSF.parse_date_code(dateRaw);
+                            if (!parsedExcelDate) return null;
+                            const dateObj = new Date(parsedExcelDate.y, parsedExcelDate.m - 1, parsedExcelDate.d);
+                            date = toDateInputValue(dateObj);
+                        } else if (typeof dateRaw === 'string') {
+                            const source = dateRaw.trim();
+                            if (!source) return null;
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(source)) {
+                                date = source;
+                            } else {
+                                const parts = source.split('/');
+                                if (parts.length !== 3) return null;
+                                const [day, month, year] = parts;
+                                date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                            }
+                        } else {
+                            return null;
+                        }
+
+                        let amount = Number(amountRaw);
+                        if (typeof amountRaw === 'string') {
+                            const normalized = amountRaw
+                                .replace(/\s+/g, '')
+                                .replace(/[R$r$]/g, '')
+                                .replace(/\./g, '')
+                                .replace(',', '.');
+                            amount = Number(normalized);
+                        }
+
+                        if (!description || !thirdPartyName || Number.isNaN(amount) || !category || !paymentMethodRaw || !paymentName || !date) {
+                            return null;
+                        }
+
+                        const paymentMethod: 'conta' | 'cartao' =
+                            (paymentMethodRaw.includes('cart') || paymentMethodRaw === 'card')
+                                ? 'cartao'
+                                : 'conta';
+
+                        const status: 'pending' | 'paid' =
+                            (statusRaw === 'paid' || statusRaw === 'pago')
+                                ? 'paid'
+                                : 'pending';
+
+                        return {
+                            date,
+                            description,
+                            thirdPartyName,
+                            amount,
+                            category,
+                            paymentMethod,
+                            paymentName,
+                            status,
+                            notes,
+                        };
+                    })
+                    .filter(item => item !== null) as ThirdPartyImportData[];
+
+                resolve(items);
+            } catch (error) {
+                reject(error);
+            }
+        };
+
+        reader.onerror = (error) => reject(error);
+        reader.readAsBinaryString(file);
+    });
+};
+
 export const exportTransactions = (transactions: any[]) => {
     const data = transactions.map(t => [
         formatDate(t.date),
@@ -458,4 +618,44 @@ export const exportTransactions = (transactions: any[]) => {
 
     XLSX.utils.book_append_sheet(wb, ws, 'Transações');
     XLSX.writeFile(wb, 'transacoes_exportadas.xlsx');
+};
+
+export const exportInvoices = (
+    fileName: string,
+    rows: InvoiceExportRow[],
+    summary: InvoiceSummaryRow[],
+    totalAllInvoices: number
+) => {
+    const wb = XLSX.utils.book_new();
+
+    const summaryData = summary.map(item => [
+        item.cardName,
+        item.transactionsCount,
+        item.total,
+    ]);
+    const summarySheet = XLSX.utils.aoa_to_sheet([
+        ['Cartao', 'Transacoes', 'Total'],
+        ...summaryData,
+        ['TOTAL GERAL', '', totalAllInvoices],
+    ]);
+    summarySheet['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, summarySheet, 'Resumo');
+
+    const detailsData = rows.map(item => [
+        formatDate(item.date),
+        item.cardName,
+        item.description,
+        item.category,
+        item.type === 'income' ? 'Receita' : 'Despesa',
+        item.amount,
+    ]);
+    const detailsSheet = XLSX.utils.aoa_to_sheet([
+        ['Data', 'Cartao', 'Descricao', 'Categoria', 'Tipo', 'Valor'],
+        ...detailsData,
+    ]);
+    detailsSheet['!cols'] = [{ wch: 14 }, { wch: 24 }, { wch: 36 }, { wch: 22 }, { wch: 14 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, detailsSheet, 'Lancamentos');
+
+    const normalizedName = fileName.toLowerCase().endsWith('.xlsx') ? fileName : `${fileName}.xlsx`;
+    XLSX.writeFile(wb, normalizedName);
 };

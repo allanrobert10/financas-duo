@@ -201,6 +201,7 @@ export type Database = {
         Row: {
           amount: number
           created_at: string | null
+          description: string
           due_date: string
           fixed_expense_id: string
           household_id: string
@@ -214,6 +215,7 @@ export type Database = {
         Insert: {
           amount: number
           created_at?: string | null
+          description?: string
           due_date: string
           fixed_expense_id: string
           household_id: string
@@ -227,6 +229,7 @@ export type Database = {
         Update: {
           amount?: number
           created_at?: string | null
+          description?: string
           due_date?: string
           fixed_expense_id?: string
           household_id?: string
@@ -273,7 +276,13 @@ export type Database = {
           household_id: string
           id: string
           is_active: boolean
+          is_installment: boolean
+          installment_total_amount: number | null
+          installment_value_mode: string | null
+          installments_count: number | null
           notes: string | null
+          start_month: number
+          start_year: number
           updated_at: string | null
           user_id: string
         }
@@ -288,7 +297,13 @@ export type Database = {
           household_id: string
           id?: string
           is_active?: boolean
+          is_installment?: boolean
+          installment_total_amount?: number | null
+          installment_value_mode?: string | null
+          installments_count?: number | null
           notes?: string | null
+          start_month?: number
+          start_year?: number
           updated_at?: string | null
           user_id: string
         }
@@ -303,7 +318,13 @@ export type Database = {
           household_id?: string
           id?: string
           is_active?: boolean
+          is_installment?: boolean
+          installment_total_amount?: number | null
+          installment_value_mode?: string | null
+          installments_count?: number | null
           notes?: string | null
+          start_month?: number
+          start_year?: number
           updated_at?: string | null
           user_id?: string
         }

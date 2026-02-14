@@ -1308,6 +1308,17 @@ a:hover {
 }
 
 /* === Responsive === */
+@media (max-width: 1024px) {
+  .dashboard-income-monthly-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .dashboard-pie-layout {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+}
+
 @media (max-width: 768px) {
   .sidebar {
     transform: translateX(-100%);
@@ -1340,6 +1351,86 @@ a:hover {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .page-header-pro {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-7);
+  }
+
+  .page-header-pro .title-group h1 {
+    font-size: 28px;
+  }
+
+  .dashboard-header-controls {
+    width: 100%;
+    justify-content: flex-start !important;
+  }
+
+  .dashboard-header-controls>div {
+    width: 100%;
+  }
+
+  .dashboard-bar-period-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .dashboard-recent-header {
+    padding: 18px 16px 10px !important;
+  }
+
+  .dashboard-recent-controls {
+    width: 100%;
+  }
+
+  .dashboard-recent-controls>div {
+    width: 100%;
+  }
+
+  .dashboard-recent-controls .input.select {
+    width: 100%;
+  }
+
+  .dashboard-income-monthly-card {
+    padding: 16px !important;
+  }
+
+  .transactions-header-actions {
+    width: 100%;
+    justify-content: flex-start !important;
+  }
+
+  .transactions-controls-row {
+    align-items: stretch !important;
+  }
+
+  .transactions-controls-left {
+    width: 100%;
+  }
+
+  .transactions-controls-left .search-input-wrapper {
+    width: 100% !important;
+  }
+
+  .transactions-list-context {
+    align-items: stretch !important;
+  }
+
+  .transactions-list-context>div {
+    width: 100%;
+  }
+
+  .transactions-list-context .input.select {
+    width: 100%;
+  }
+
+  .filter-bar {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
 }
 
 @media (max-width: 480px) {
@@ -1350,6 +1441,31 @@ a:hover {
   .modal-content {
     width: 95%;
     margin: var(--space-4);
+  }
+
+  .page-header-pro .title-group h1 {
+    font-size: 24px;
+  }
+
+  .btn-nova-tx {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .dashboard-recent-controls {
+    gap: 6px !important;
+  }
+
+  .dashboard-bar-period-controls button {
+    padding: 4px 8px !important;
+  }
+
+  .pro-table-header th {
+    padding: 10px 8px;
+  }
+
+  .data-table td {
+    padding: 10px 8px;
   }
 }
 

@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import {
     LayoutDashboard, ArrowLeftRight, CreditCard, Tags, Wallet,
-    PieChart, Settings, LogOut, Moon, Sun, ChevronLeft, ChevronRight,
+    Settings, LogOut, Moon, Sun, ChevronLeft, ChevronRight,
     FolderOpen
 } from 'lucide-react'
 import { useTheme } from '@/components/ThemeProvider'
@@ -17,7 +17,6 @@ const navItems = [
     { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { href: '/transactions', icon: ArrowLeftRight, label: 'Transações' },
     { label: 'Gerenciar', section: 'gerenciar' },
-    { href: '/fixed-expenses', icon: PieChart, label: 'Despesas Fixas' },
     { href: '/cards', icon: CreditCard, label: 'Cartões' },
     { href: '/accounts', icon: Wallet, label: 'Contas' },
     { href: '/categories', icon: FolderOpen, label: 'Categorias' },
@@ -114,7 +113,7 @@ export function Sidebar({ mobileOpen, setMobileOpen }: SidebarProps) {
 
                         // Links
                         const Icon = item.icon!
-                        const isActive = pathname === item.href
+                        const isActive = pathname === item.href || (item.href === '/transactions' && pathname === '/fixed-expenses')
 
                         return (
                             <Link

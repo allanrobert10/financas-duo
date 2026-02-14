@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate, getMonthName, getTodayDateInputValue } from '@/lib/utils'
 import {
@@ -16,6 +17,7 @@ const CHART_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#E
 
 export default function DashboardPage() {
     const supabase = createClient()
+    const router = useRouter()
     const [profile, setProfile] = useState<Profile | null>(null)
     const [transactions, setTransactions] = useState<Transaction[]>([])
     const [categories, setCategories] = useState<Category[]>([])
@@ -25,6 +27,8 @@ export default function DashboardPage() {
     const [cards, setCards] = useState<Card[]>([])
     const [barPeriod, setBarPeriod] = useState<number | 'today'>(6)
     const [searchTermRecent, setSearchTermRecent] = useState('')
+    const [recentCardFilter, setRecentCardFilter] = useState<string>('all')
+    const [recentLimit, setRecentLimit] = useState<number>(10)
 
     // Budget specific states
     const [showBudgetModal, setShowBudgetModal] = useState(false)
@@ -282,10 +286,20 @@ export default function DashboardPage() {
         .map(([name, value]) => ({ name, value: value as number }))
         .sort((a, b) => b.value - a.value)
 
+    const axisCurrencyFormatter = (value: any) => {
+        const absolute = Math.abs(Number(value) || 0)
+        if (absolute >= 1000) {
+            return `R$ ${(Number(value) / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k`
+        }
+        return `R$ ${Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`
+    }
+
     // Dynamic periods bar chart
     const barData = barPeriod === 'today' ? [
         {
             name: 'Hoje',
+            month: now.getMonth() + 1,
+            year: now.getFullYear(),
             receitas: transactions.filter(t => t.type === 'income' && t.date === todayDate && !t.is_third_party).reduce((s, t) => s + t.amount, 0),
             despesas: transactions.filter(t => t.type === 'expense' && t.date === todayDate && !t.is_third_party).reduce((s, t) => s + t.amount, 0),
         }
@@ -309,15 +323,65 @@ export default function DashboardPage() {
 
         return {
             name: getMonthName(m).substring(0, 3),
+            month: m,
+            year: y,
             receitas: mTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0),
             despesas: mTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0),
         }
     })
 
-    const recentTx = transactions
+    const incomeByMonthData = Array.from({ length: 12 }, (_, i) => {
+        let m = month - (11 - i)
+        let y = year
+
+        while (m <= 0) {
+            m += 12
+            y -= 1
+        }
+
+        const monthIncome = transactions
+            .filter(t => t.type === 'income' && !t.is_third_party)
+            .filter(t => {
+                const [tYear, tMonth] = t.date.split('-').map(Number)
+                return tMonth === m && tYear === y
+            })
+            .reduce((sum, t) => sum + Number(t.amount), 0)
+
+        return {
+            key: `${y}-${m}`,
+            month: m,
+            year: y,
+            label: `${getMonthName(m).substring(0, 3)}/${String(y).slice(-2)}`,
+            total: monthIncome,
+        }
+    })
+    const selectedMonthIncome = incomeByMonthData.find(item => item.month === month && item.year === year)?.total || 0
+    const yearlyIncomeWindowTotal = incomeByMonthData.reduce((sum, item) => sum + item.total, 0)
+
+    const recentTxBase = transactions
         .filter(t => !t.is_third_party)
-        .filter(t => t.description.toLowerCase().includes(searchTermRecent.toLowerCase()))
-        .slice(0, 8)
+        .filter(t => recentCardFilter === 'all' ? true : t.card_id === recentCardFilter)
+
+    const recentTx = recentTxBase
+        .filter(t => {
+            const query = searchTermRecent.toLowerCase().trim()
+            if (!query) return true
+            const cardName = t.card_id ? (cards.find(card => card.id === t.card_id)?.name || '') : ''
+            return t.description.toLowerCase().includes(query)
+                || cardName.toLowerCase().includes(query)
+        })
+        .slice(0, recentLimit)
+
+    function handleBarClick(payload?: { month?: number; year?: number }) {
+        if (!payload?.month || !payload?.year) return
+        const params = new URLSearchParams({
+            view: 'list',
+            month: String(payload.month),
+            year: String(payload.year),
+            source: 'dashboard-chart',
+        })
+        router.push(`/transactions?${params.toString()}`)
+    }
 
     if (loading) {
         return <SkeletonPage />
@@ -332,7 +396,7 @@ export default function DashboardPage() {
                 </div>
 
                 {/* Tabs & Date Navigation */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                <div className="dashboard-header-controls" style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     <div style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 12, border: '1px solid var(--color-border)' }}>
                         <button
                             className={`btn btn-sm ${activeTab === 'overview' ? 'btn-primary' : 'btn-ghost'}`}
@@ -534,7 +598,7 @@ export default function DashboardPage() {
                                     <div className="chart-card-title">Receitas vs Despesas</div>
                                     <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Visão consolidada comparando os meses</p>
                                 </div>
-                                <div style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 10, gap: 4 }}>
+                                <div className="dashboard-bar-period-controls" style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 10, gap: 4, flexWrap: 'wrap' }}>
                                     {['today', 1, 3, 6, 12].map(p => (
                                         <button
                                             key={p}
@@ -558,9 +622,13 @@ export default function DashboardPage() {
                                 </div>
                             </div>
                             <ResponsiveContainer width="100%" height={280}>
-                                <BarChart data={barData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                    <XAxis dataKey="name" stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} dy={10} />
-                                    <YAxis stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickFormatter={v => `R$ ${(v / 1000).toFixed(0)}k`} />
+                                <BarChart
+                                    data={barData}
+                                    margin={{ top: 10, right: 12, left: 8, bottom: 0 }}
+                                    onClick={(state: any) => handleBarClick(state?.activePayload?.[0]?.payload)}
+                                >
+                                    <XAxis dataKey="name" stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} dy={10} minTickGap={10} />
+                                    <YAxis width={70} stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.9 }} tickFormatter={axisCurrencyFormatter} />
                                     <Tooltip
                                         cursor={{ fill: 'rgba(16, 185, 129, 0.04)' }}
                                         content={({ active, payload }) => {
@@ -584,17 +652,20 @@ export default function DashboardPage() {
                                             return null
                                         }}
                                     />
-                                    <Bar dataKey="receitas" fill="var(--color-income)" radius={[6, 6, 0, 0]} barSize={24} />
-                                    <Bar dataKey="despesas" fill="var(--color-expense)" radius={[6, 6, 0, 0]} barSize={24} />
+                                    <Bar dataKey="receitas" fill="var(--color-income)" radius={[6, 6, 0, 0]} barSize={24} cursor="pointer" />
+                                    <Bar dataKey="despesas" fill="var(--color-expense)" radius={[6, 6, 0, 0]} barSize={24} cursor="pointer" />
                                 </BarChart>
                             </ResponsiveContainer>
+                            <p style={{ marginTop: 10, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                Clique em uma barra para abrir as transacoes daquele mes.
+                            </p>
                         </div>
 
                         <div className="chart-card stagger-item">
                             <div className="chart-card-title">Onde você gasta mais</div>
                             <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 24 }}>Categorias com maiores despesas este mês</p>
                             {pieData.length > 0 ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                                <div className="dashboard-pie-layout" style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
                                     <div style={{ flex: 1, minWidth: 0, height: 200 }}>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <RePieChart>
@@ -663,34 +734,117 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
+                    <div className="chart-card stagger-item dashboard-income-monthly-card" style={{ marginTop: 24 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+                            <div>
+                                <div className="chart-card-title" style={{ marginBottom: 8 }}>Receitas por Mês</div>
+                                <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                                    Receitas por calendario. O total do mes selecionado fica separado do acumulado de 12 meses.
+                                </p>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+                                    Mes selecionado
+                                </div>
+                                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-income)' }}>
+                                    {formatCurrency(selectedMonthIncome)}
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                    Ultimos 12 meses: {formatCurrency(yearlyIncomeWindowTotal)}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="dashboard-income-monthly-grid" style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 18, alignItems: 'stretch' }}>
+                            <div style={{ minHeight: 220 }}>
+                                <ResponsiveContainer width="100%" height={220}>
+                                    <BarChart data={incomeByMonthData} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
+                                        <XAxis dataKey="label" stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.8 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.8 }} minTickGap={10} />
+                                        <YAxis width={70} stroke="var(--color-text-muted)" fontSize={11} tick={{ fill: 'var(--color-text-tertiary)', fontWeight: 500 }} axisLine={{ stroke: 'var(--color-text-muted)', opacity: 0.8 }} tickLine={{ stroke: 'var(--color-text-muted)', opacity: 0.8 }} tickFormatter={axisCurrencyFormatter} />
+                                        <Tooltip
+                                            cursor={{ fill: 'rgba(16, 185, 129, 0.05)' }}
+                                            formatter={(value: any) => formatCurrency(Number(value))}
+                                            labelFormatter={(label: any) => `Mes: ${String(label)}`}
+                                        />
+                                        <Bar dataKey="total" fill="var(--color-income)" radius={[6, 6, 0, 0]} barSize={16} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                            <div className="dashboard-income-monthly-list" style={{ border: '1px solid var(--color-border)', borderRadius: 12, background: 'var(--color-bg-tertiary)', overflow: 'hidden' }}>
+                                <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border)', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--color-text-tertiary)' }}>
+                                    Totais por mes
+                                </div>
+                                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                                    {incomeByMonthData.slice().reverse().map(item => (
+                                        <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', borderBottom: '1px solid var(--color-border)' }}>
+                                            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                                                {getMonthName(item.month)} {item.year}
+                                            </span>
+                                            <span style={{ fontSize: 12, fontWeight: 800, color: item.month === month && item.year === year ? 'var(--color-income)' : 'var(--color-text-primary)' }}>
+                                                {formatCurrency(item.total)}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     {/* Recent Transactions */}
                     <div className="chart-card stagger-item" style={{ marginTop: 24, padding: 0, overflow: 'hidden' }}>
-                        <div style={{ padding: '24px 24px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div className="dashboard-recent-header" style={{ padding: '24px 24px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                             <div>
                                 <div className="chart-card-title">Transações Recentes</div>
                                 <p style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>Últimas movimentações da sua conta</p>
                             </div>
-                            <div style={{ position: 'relative', width: 280 }}>
-                                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
-                                <input
-                                    type="text"
-                                    placeholder="Buscar..."
-                                    value={searchTermRecent}
-                                    onChange={(e) => setSearchTermRecent(e.target.value)}
-                                    style={{
-                                        width: '100%',
-                                        padding: '8px 10px 8px 32px',
-                                        borderRadius: 10,
-                                        background: 'var(--color-bg-tertiary)',
-                                        border: '1px solid var(--color-border)',
-                                        fontSize: 13,
-                                        color: 'var(--color-text-primary)'
-                                    }}
-                                />
+                            <div className="dashboard-recent-controls" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <div style={{ position: 'relative', width: 240, maxWidth: '100%' }}>
+                                    <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
+                                    <input
+                                        type="text"
+                                        placeholder="Buscar..."
+                                        value={searchTermRecent}
+                                        onChange={(e) => setSearchTermRecent(e.target.value)}
+                                        style={{
+                                            width: '100%',
+                                            padding: '8px 10px 8px 32px',
+                                            borderRadius: 10,
+                                            background: 'var(--color-bg-tertiary)',
+                                            border: '1px solid var(--color-border)',
+                                            fontSize: 13,
+                                            color: 'var(--color-text-primary)'
+                                        }}
+                                    />
+                                </div>
+                                <select
+                                    className="input select"
+                                    value={recentCardFilter}
+                                    onChange={(e) => setRecentCardFilter(e.target.value)}
+                                    style={{ height: 36, minWidth: 170, paddingTop: 0, paddingBottom: 0, fontSize: 12 }}
+                                >
+                                    <option value="all">Todos os cartoes</option>
+                                    {cards.map(card => (
+                                        <option key={card.id} value={card.id}>{card.name}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    className="input select"
+                                    value={String(recentLimit)}
+                                    onChange={(e) => setRecentLimit(Number(e.target.value))}
+                                    style={{ height: 36, minWidth: 120, paddingTop: 0, paddingBottom: 0, fontSize: 12 }}
+                                >
+                                    <option value="10">Ultimas 10</option>
+                                    <option value="50">Ultimas 50</option>
+                                    <option value="100">Ultimas 100</option>
+                                </select>
                             </div>
                         </div>
+                        <div style={{ padding: '0 24px 8px', fontSize: 12, color: 'var(--color-text-tertiary)', fontWeight: 600 }}>
+                            Mostrando {recentTx.length} de {recentTxBase.length} transacao(oes)
+                        </div>
                         {recentTx.length > 0 ? (
-                            <table className="data-table" style={{ marginTop: 12 }}>
+                            <div style={{ overflowX: 'auto' }}>
+                            <table className="data-table" style={{ marginTop: 12, minWidth: 640 }}>
                                 <thead className="pro-table-header">
                                     <tr>
                                         <th>Data</th>
@@ -735,6 +889,7 @@ export default function DashboardPage() {
                                     })}
                                 </tbody>
                             </table>
+                            </div>
                         ) : (
                             <div className="empty-state" style={{ padding: '60px 0' }}>
                                 <div style={{ background: 'var(--color-bg-tertiary)', width: 56, height: 56, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>

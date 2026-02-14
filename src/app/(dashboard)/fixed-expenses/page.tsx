@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, formatDate, getMonthName } from '@/lib/utils'
 import {
@@ -40,6 +42,7 @@ type FixedOccurrenceWithRelations = FixedExpenseOccurrence & {
 }
 
 type PaymentMethod = 'account' | 'card'
+type InstallmentValueMode = 'per_installment' | 'total'
 
 function formatMoneyInput(raw: string): string {
     const digits = raw.replace(/\D/g, '')
@@ -74,8 +77,61 @@ function buildFixedExpenseKey(
     return `${normalizeKey(description)}|${dueDay}|${accountId || ''}|${cardId || ''}`
 }
 
+const FIXED_EXPENSE_OCCURRENCE_MONTHS_AHEAD = 24
+
+function buildPeriodsFrom(startMonth: number, startYear: number, count: number) {
+    return Array.from({ length: count }, (_, index) => {
+        let month = startMonth + index
+        let year = startYear
+        while (month > 12) {
+            month -= 12
+            year += 1
+        }
+        return { month, year }
+    })
+}
+
+function getTemplateInstallmentPeriods(
+    startMonth: number,
+    startYear: number,
+    isInstallment: boolean,
+    installmentsCount: number | null | undefined
+) {
+    const totalMonths = isInstallment
+        ? Math.max(1, installmentsCount || 1)
+        : FIXED_EXPENSE_OCCURRENCE_MONTHS_AHEAD
+
+    return buildPeriodsFrom(startMonth, startYear, totalMonths)
+}
+
+function toPeriodKey(year: number, month: number): string {
+    return `${year}-${month}`
+}
+
+function getOccurrenceLaunchDescription(item: FixedOccurrenceWithRelations): string {
+    const template = item.fixed_expenses
+    const baseDescription = (item.description || template?.description || '').trim()
+    if (!baseDescription) return '-'
+
+    if (!template?.is_installment || !template.installments_count || template.installments_count < 2) {
+        return baseDescription
+    }
+
+    const startMonth = template.start_month || item.month
+    const startYear = template.start_year || item.year
+    const installmentIndex = ((item.year - startYear) * 12) + (item.month - startMonth) + 1
+    if (installmentIndex < 1 || installmentIndex > template.installments_count) {
+        return baseDescription
+    }
+
+    const currentInstallment = String(installmentIndex).padStart(2, '0')
+    const totalInstallments = String(template.installments_count).padStart(2, '0')
+    return `${baseDescription} ${currentInstallment}/${totalInstallments}`
+}
+
 export default function FixedExpensesPage() {
     const supabase = createClient()
+    const router = useRouter()
     const now = new Date()
 
     const [month, setMonth] = useState(now.getMonth() + 1)
@@ -100,6 +156,8 @@ export default function FixedExpensesPage() {
 
     const [fixedExpenses, setFixedExpenses] = useState<FixedExpenseWithRelations[]>([])
     const [occurrences, setOccurrences] = useState<FixedOccurrenceWithRelations[]>([])
+    const [selectedFixedExpenseIds, setSelectedFixedExpenseIds] = useState<string[]>([])
+    const [bulkDeletingFixedExpenses, setBulkDeletingFixedExpenses] = useState(false)
 
     const [showModal, setShowModal] = useState(false)
     const [editing, setEditing] = useState<FixedExpenseWithRelations | null>(null)
@@ -112,6 +170,9 @@ export default function FixedExpensesPage() {
         account_id: '',
         card_id: '',
         notes: '',
+        is_installment: false,
+        installment_value_mode: 'per_installment' as InstallmentValueMode,
+        installments_count: '2',
         is_active: true,
     })
 
@@ -123,6 +184,10 @@ export default function FixedExpensesPage() {
     useEffect(() => {
         void loadData()
     }, [month, year])
+
+    useEffect(() => {
+        setSelectedFixedExpenseIds(prev => prev.filter(id => fixedExpenses.some(item => item.id === id)))
+    }, [fixedExpenses])
 
     const totals = useMemo(() => {
         return occurrences.reduce(
@@ -147,13 +212,37 @@ export default function FixedExpensesPage() {
         if (templatesError) throw templatesError
         if (!templates || templates.length === 0) return
 
-        const payload = templates.map(template => ({
+        const targetPeriod = targetYear * 100 + targetMonth
+        const eligibleTemplates = templates.filter(template => {
+            const startMonth = template.start_month || 1
+            const startYear = template.start_year || targetYear
+            const startPeriod = startYear * 100 + startMonth
+            if (startPeriod > targetPeriod) return false
+
+            if (template.is_installment) {
+                const installmentPeriods = getTemplateInstallmentPeriods(
+                    startMonth,
+                    startYear,
+                    true,
+                    template.installments_count
+                )
+                const lastInstallment = installmentPeriods[installmentPeriods.length - 1]
+                const endPeriod = lastInstallment.year * 100 + lastInstallment.month
+                return targetPeriod <= endPeriod
+            }
+
+            return true
+        })
+        if (eligibleTemplates.length === 0) return
+
+        const payload = eligibleTemplates.map(template => ({
             fixed_expense_id: template.id,
             household_id: targetHouseholdId,
             month: targetMonth,
             year: targetYear,
             due_date: getDueDateValue(targetYear, targetMonth, template.due_day),
             amount: template.amount,
+            description: template.description,
             status: 'pending',
         }))
 
@@ -165,6 +254,55 @@ export default function FixedExpensesPage() {
             })
 
         if (upsertError) throw upsertError
+    }
+
+    async function ensureForwardOccurrencesForTemplate(params: {
+        templateId: string
+        targetHouseholdId: string
+        startMonth: number
+        startYear: number
+        amount: number
+        dueDay: number
+        description: string
+        isInstallment: boolean
+        installmentsCount?: number | null
+    }) {
+        const {
+            templateId,
+            targetHouseholdId,
+            startMonth,
+            startYear,
+            amount,
+            dueDay,
+            description,
+            isInstallment,
+            installmentsCount,
+        } = params
+        const periods = getTemplateInstallmentPeriods(
+            startMonth,
+            startYear,
+            isInstallment,
+            installmentsCount
+        )
+        const payload = periods.map(period => ({
+            fixed_expense_id: templateId,
+            household_id: targetHouseholdId,
+            month: period.month,
+            year: period.year,
+            due_date: getDueDateValue(period.year, period.month, dueDay),
+            amount,
+            description,
+            status: 'pending',
+        }))
+
+        const { error } = await supabase
+            .from('fixed_expense_occurrences')
+            .upsert(payload, {
+                onConflict: 'fixed_expense_id,month,year',
+                ignoreDuplicates: true,
+            })
+
+        if (error) throw error
     }
 
     async function loadData() {
@@ -298,6 +436,8 @@ export default function FixedExpensesPage() {
                     accountMap,
                     cardMap,
                     existingMap,
+                    startMonth: month,
+                    startYear: year,
                 })
 
                 if (result === 'created') created++
@@ -331,6 +471,8 @@ export default function FixedExpensesPage() {
         accountMap: Map<string, string>
         cardMap: Map<string, string>
         existingMap: Map<string, string>
+        startMonth: number
+        startYear: number
     }): Promise<'created' | 'updated' | 'error'> {
         const {
             row,
@@ -340,6 +482,8 @@ export default function FixedExpensesPage() {
             accountMap,
             cardMap,
             existingMap,
+            startMonth,
+            startYear,
         } = params
 
         let categoryId = categoryMap.get(normalizeKey(row.category))
@@ -381,6 +525,10 @@ export default function FixedExpensesPage() {
             account_id: accountId,
             card_id: cardId,
             notes: row.notes?.trim() || null,
+            is_installment: false,
+            installment_value_mode: null,
+            installment_total_amount: null,
+            installments_count: null,
             is_active: row.isActive ?? true,
             updated_at: new Date().toISOString(),
         }
@@ -395,7 +543,11 @@ export default function FixedExpensesPage() {
 
         const { data: inserted, error } = await supabase
             .from('fixed_expenses')
-            .insert(payload)
+            .insert({
+                ...payload,
+                start_month: startMonth,
+                start_year: startYear,
+            })
             .select('id')
             .single()
 
@@ -419,6 +571,9 @@ export default function FixedExpensesPage() {
             account_id: firstAccount,
             card_id: firstCard,
             notes: '',
+            is_installment: false,
+            installment_value_mode: 'per_installment',
+            installments_count: '2',
             is_active: true,
         })
         setShowModal(true)
@@ -429,13 +584,20 @@ export default function FixedExpensesPage() {
         setEditing(item)
         setForm({
             description: item.description,
-            amount: Number(item.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+            amount: Number(
+                item.is_installment && item.installment_value_mode === 'total' && item.installment_total_amount
+                    ? item.installment_total_amount
+                    : item.amount
+            ).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
             due_day: String(item.due_day),
             category_id: item.category_id,
             payment_method: paymentMethod,
             account_id: item.account_id || '',
             card_id: item.card_id || '',
             notes: item.notes || '',
+            is_installment: !!item.is_installment,
+            installment_value_mode: item.installment_value_mode === 'total' ? 'total' : 'per_installment',
+            installments_count: String(item.installments_count || 2),
             is_active: item.is_active,
         })
         setShowModal(true)
@@ -445,8 +607,9 @@ export default function FixedExpensesPage() {
         e.preventDefault()
         if (!householdId || !userId) return
 
-        const parsedAmount = parseMoneyInput(form.amount || '0')
+        const parsedInputAmount = parseMoneyInput(form.amount || '0')
         const dueDay = parseInt(form.due_day, 10)
+        const installmentsCount = parseInt(form.installments_count, 10)
 
         if (!form.description.trim()) {
             setMessage({ type: 'error', text: 'Informe a descricao.' })
@@ -456,7 +619,7 @@ export default function FixedExpensesPage() {
             setMessage({ type: 'error', text: 'Selecione a categoria.' })
             return
         }
-        if (!parsedAmount || Number.isNaN(parsedAmount)) {
+        if (!parsedInputAmount || Number.isNaN(parsedInputAmount)) {
             setMessage({ type: 'error', text: 'Informe um valor valido.' })
             return
         }
@@ -472,20 +635,47 @@ export default function FixedExpensesPage() {
             setMessage({ type: 'error', text: 'Selecione o cartao.' })
             return
         }
+        if (form.is_installment && (Number.isNaN(installmentsCount) || installmentsCount < 2 || installmentsCount > 360)) {
+            setMessage({ type: 'error', text: 'Parcelamento deve ter entre 2 e 360 parcelas.' })
+            return
+        }
+
+        const recurringAmount = form.is_installment && form.installment_value_mode === 'total'
+            ? Number((parsedInputAmount / installmentsCount).toFixed(2))
+            : parsedInputAmount
 
         setSaving(true)
         setMessage(null)
+
+        const nextDescription = form.description.trim()
+        const currentDescription = editing?.description || ''
+        const descriptionChanged = !!editing && nextDescription !== currentDescription
+        let applyDescriptionToFuture = true
+
+        if (descriptionChanged) {
+            applyDescriptionToFuture = confirm(
+                'A descricao foi alterada.\n\nOK: aplicar no mes atual e nos proximos meses.\nCancelar: alterar somente no mes atual.'
+            )
+        }
+
+        const templateDescription = descriptionChanged && !applyDescriptionToFuture
+            ? currentDescription
+            : nextDescription
 
         const payload = {
             household_id: householdId,
             user_id: userId,
             category_id: form.category_id,
-            description: form.description.trim(),
-            amount: parsedAmount,
+            description: templateDescription,
+            amount: recurringAmount,
             due_day: dueDay,
             account_id: form.payment_method === 'account' ? form.account_id : null,
             card_id: form.payment_method === 'card' ? form.card_id : null,
             notes: form.notes.trim() || null,
+            is_installment: form.is_installment,
+            installment_value_mode: form.is_installment ? form.installment_value_mode : null,
+            installment_total_amount: form.is_installment && form.installment_value_mode === 'total' ? parsedInputAmount : null,
+            installments_count: form.is_installment ? installmentsCount : null,
             is_active: form.is_active,
             updated_at: new Date().toISOString(),
         }
@@ -495,19 +685,170 @@ export default function FixedExpensesPage() {
                 const { error } = await supabase.from('fixed_expenses').update(payload).eq('id', editing.id)
                 if (error) throw error
 
-                await supabase
+                const selectedPeriod = year * 100 + month
+                const templateStartMonth = editing.start_month || month
+                const templateStartYear = editing.start_year || year
+                const templateStartPeriod = templateStartYear * 100 + templateStartMonth
+                const fromPeriod = Math.max(selectedPeriod, templateStartPeriod)
+                const fromMonth = templateStartPeriod > selectedPeriod ? templateStartMonth : month
+                const fromYear = templateStartPeriod > selectedPeriod ? templateStartYear : year
+                const shouldPushDescriptionForward = descriptionChanged && applyDescriptionToFuture
+                const installmentPeriods = form.is_installment
+                    ? getTemplateInstallmentPeriods(
+                        templateStartMonth,
+                        templateStartYear,
+                        true,
+                        installmentsCount
+                    )
+                    : []
+                const allowedPeriods = form.is_installment
+                    ? installmentPeriods
+                    : buildPeriodsFrom(fromMonth, fromYear, FIXED_EXPENSE_OCCURRENCE_MONTHS_AHEAD)
+                const installmentPeriodKeys = new Set(
+                    installmentPeriods.map(period => toPeriodKey(period.year, period.month))
+                )
+                const lastInstallmentPeriod = installmentPeriods[installmentPeriods.length - 1]
+                const installmentEndPeriod = lastInstallmentPeriod
+                    ? (lastInstallmentPeriod.year * 100 + lastInstallmentPeriod.month)
+                    : null
+                const { data: forwardRows, error: forwardRowsError } = await supabase
                     .from('fixed_expense_occurrences')
-                    .update({
-                        amount: parsedAmount,
-                        due_date: getDueDateValue(year, month, dueDay),
-                    })
+                    .select('id, month, year, status')
                     .eq('fixed_expense_id', editing.id)
-                    .eq('month', month)
-                    .eq('year', year)
-                    .eq('status', 'pending')
+                    .eq('household_id', householdId)
+                    .or(`year.gt.${fromYear},and(year.eq.${fromYear},month.gte.${fromMonth})`)
+
+                if (forwardRowsError) throw forwardRowsError
+
+                const updates = (forwardRows || [])
+                    .filter(row => {
+                        if (row.status !== 'pending') return false
+                        const rowPeriod = row.year * 100 + row.month
+                        if (rowPeriod < fromPeriod) return false
+                        if (!form.is_installment) return true
+                        return installmentPeriodKeys.has(toPeriodKey(row.year, row.month))
+                    })
+                    .map(row =>
+                        supabase
+                            .from('fixed_expense_occurrences')
+                            .update({
+                                amount: recurringAmount,
+                                due_date: getDueDateValue(row.year, row.month, dueDay),
+                                ...(shouldPushDescriptionForward ? { description: nextDescription } : {}),
+                            })
+                            .eq('id', row.id)
+                    )
+
+                if (updates.length > 0) {
+                    const results = await Promise.all(updates)
+                    const firstError = results.find(result => result.error)?.error
+                    if (firstError) throw firstError
+                }
+
+                const existingPeriodSet = new Set(
+                    (forwardRows || []).map(row => toPeriodKey(row.year, row.month))
+                )
+                const missingForwardRows = allowedPeriods
+                    .filter(period => {
+                        const periodValue = period.year * 100 + period.month
+                        return periodValue >= fromPeriod && !existingPeriodSet.has(toPeriodKey(period.year, period.month))
+                    })
+                    .map(period => ({
+                        fixed_expense_id: editing.id,
+                        household_id: householdId,
+                        month: period.month,
+                        year: period.year,
+                        due_date: getDueDateValue(period.year, period.month, dueDay),
+                        amount: recurringAmount,
+                        description: shouldPushDescriptionForward ? nextDescription : templateDescription,
+                        status: 'pending',
+                    }))
+
+                if (missingForwardRows.length > 0) {
+                    const { error: missingRowsError } = await supabase
+                        .from('fixed_expense_occurrences')
+                        .upsert(missingForwardRows, {
+                            onConflict: 'fixed_expense_id,month,year',
+                            ignoreDuplicates: true,
+                        })
+                    if (missingRowsError) throw missingRowsError
+                }
+
+                if (form.is_installment) {
+                    const rowsToDelete = (forwardRows || []).filter(row => {
+                        const rowPeriod = row.year * 100 + row.month
+                        if (!installmentEndPeriod || rowPeriod <= installmentEndPeriod) return false
+                        return row.status === 'pending'
+                    })
+
+                    if (rowsToDelete.length > 0) {
+                        const { error: deleteError } = await supabase
+                            .from('fixed_expense_occurrences')
+                            .delete()
+                            .in('id', rowsToDelete.map(row => row.id))
+                        if (deleteError) throw deleteError
+                    }
+                }
+
+                if (descriptionChanged && !applyDescriptionToFuture) {
+                    const { data: currentRow, error: currentRowError } = await supabase
+                        .from('fixed_expense_occurrences')
+                        .select('id')
+                        .eq('fixed_expense_id', editing.id)
+                        .eq('household_id', householdId)
+                        .eq('month', month)
+                        .eq('year', year)
+                        .maybeSingle()
+
+                    if (currentRowError) throw currentRowError
+
+                    if (currentRow?.id) {
+                        const { error: updateCurrentError } = await supabase
+                            .from('fixed_expense_occurrences')
+                            .update({ description: nextDescription })
+                            .eq('id', currentRow.id)
+                        if (updateCurrentError) throw updateCurrentError
+                    } else {
+                        const { error: insertCurrentError } = await supabase
+                            .from('fixed_expense_occurrences')
+                            .insert({
+                                fixed_expense_id: editing.id,
+                                household_id: householdId,
+                                month,
+                                year,
+                                due_date: getDueDateValue(year, month, dueDay),
+                                amount: recurringAmount,
+                                description: nextDescription,
+                                status: 'pending',
+                            })
+                        if (insertCurrentError) throw insertCurrentError
+                    }
+                }
             } else {
-                const { error } = await supabase.from('fixed_expenses').insert(payload)
+                const { data: insertedTemplate, error } = await supabase
+                    .from('fixed_expenses')
+                    .insert({
+                        ...payload,
+                        start_month: month,
+                        start_year: year,
+                    })
+                    .select('id')
+                    .single()
                 if (error) throw error
+
+                if (insertedTemplate?.id) {
+                    await ensureForwardOccurrencesForTemplate({
+                        templateId: insertedTemplate.id,
+                        targetHouseholdId: householdId,
+                        startMonth: month,
+                        startYear: year,
+                        amount: recurringAmount,
+                        dueDay,
+                        description: nextDescription,
+                        isInstallment: form.is_installment,
+                        installmentsCount: form.is_installment ? installmentsCount : null,
+                    })
+                }
             }
 
             await ensureMonthOccurrences(householdId, month, year)
@@ -531,7 +872,63 @@ export default function FixedExpensesPage() {
             setMessage({ type: 'error', text: error.message })
             return
         }
+        setSelectedFixedExpenseIds(prev => prev.filter(itemId => itemId !== id))
         await loadData()
+    }
+
+    function toggleFixedExpenseSelect(id: string) {
+        setSelectedFixedExpenseIds(prev =>
+            prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
+        )
+    }
+
+    function toggleFixedExpenseSelectAll() {
+        if (fixedExpenses.length === 0) return
+        if (selectedFixedExpenseIds.length === fixedExpenses.length) {
+            setSelectedFixedExpenseIds([])
+            return
+        }
+        setSelectedFixedExpenseIds(fixedExpenses.map(item => item.id))
+    }
+
+    function handleEditSelectedFixedExpense() {
+        if (selectedFixedExpenseIds.length !== 1) {
+            setMessage({ type: 'error', text: 'Selecione apenas 1 modelo para editar.' })
+            return
+        }
+
+        const selectedItem = fixedExpenses.find(item => item.id === selectedFixedExpenseIds[0])
+        if (!selectedItem) {
+            setMessage({ type: 'error', text: 'Modelo selecionado nao encontrado.' })
+            return
+        }
+
+        openEdit(selectedItem)
+    }
+
+    async function handleBulkDeleteFixedExpenses() {
+        if (selectedFixedExpenseIds.length === 0) return
+        if (!confirm(`Excluir ${selectedFixedExpenseIds.length} despesas fixas selecionadas?`)) return
+
+        setBulkDeletingFixedExpenses(true)
+        setMessage(null)
+        try {
+            const { error } = await supabase
+                .from('fixed_expenses')
+                .delete()
+                .in('id', selectedFixedExpenseIds)
+
+            if (error) throw error
+
+            setSelectedFixedExpenseIds([])
+            await loadData()
+            setMessage({ type: 'success', text: 'Despesas fixas selecionadas excluidas com sucesso.' })
+        } catch (error: any) {
+            console.error(error)
+            setMessage({ type: 'error', text: error?.message || 'Erro ao excluir despesas fixas selecionadas.' })
+        } finally {
+            setBulkDeletingFixedExpenses(false)
+        }
     }
 
     async function handleMarkAsPaid(item: FixedOccurrenceWithRelations) {
@@ -547,12 +944,13 @@ export default function FixedExpensesPage() {
         setMessage(null)
 
         try {
+            const launchDescription = getOccurrenceLaunchDescription(item)
             const transactionPayload = {
                 household_id: householdId,
                 user_id: userId,
                 type: 'expense',
                 amount: item.amount,
-                description: template.description,
+                description: launchDescription,
                 date: item.due_date,
                 category_id: template.category_id,
                 account_id: template.account_id,
@@ -633,6 +1031,15 @@ export default function FixedExpensesPage() {
     }
 
     const isCurrentPeriod = month === now.getMonth() + 1 && year === now.getFullYear()
+    const listViewHref = `/transactions?view=list&month=${month}&year=${year}`
+    const invoicesViewHref = '/transactions?view=invoices'
+    const thirdPartyViewHref = `/transactions?view=third-party&focus=third-party&month=${month}&year=${year}`
+
+    useEffect(() => {
+        router.prefetch(listViewHref)
+        router.prefetch(invoicesViewHref)
+        router.prefetch(thirdPartyViewHref)
+    }, [router, listViewHref, invoicesViewHref, thirdPartyViewHref])
 
     return (
         <div className="fade-in">
@@ -658,6 +1065,61 @@ export default function FixedExpensesPage() {
                         onChange={handleImportData}
                         style={{ display: 'none' }}
                     />
+                </div>
+            </div>
+
+            <div
+                className="transactions-controls-row"
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: 'var(--space-4)',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                }}
+            >
+                <div
+                    style={{
+                        display: 'flex',
+                        background: 'var(--color-bg-tertiary)',
+                        padding: 4,
+                        borderRadius: 12,
+                        border: '1px solid var(--color-border)',
+                        boxShadow: 'var(--shadow-sm)',
+                    }}
+                >
+                    <Link
+                        href={listViewHref}
+                        prefetch
+                        className="btn btn-sm btn-ghost"
+                        style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                    >
+                        Lancamentos
+                    </Link>
+                    <Link
+                        href={invoicesViewHref}
+                        prefetch
+                        className="btn btn-sm btn-ghost"
+                        style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                    >
+                        Faturas
+                    </Link>
+                    <Link
+                        href={thirdPartyViewHref}
+                        prefetch
+                        className="btn btn-sm btn-ghost"
+                        style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                    >
+                        Terceiros
+                    </Link>
+                    <button
+                        className="btn btn-sm btn-primary"
+                        style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                        aria-current="page"
+                    >
+                        Despesas Fixas
+                    </button>
                 </div>
             </div>
 
@@ -797,10 +1259,11 @@ export default function FixedExpensesPage() {
                             ) : (
                                 occurrences.map(item => {
                                     const template = item.fixed_expenses
+                                    const launchDescription = getOccurrenceLaunchDescription(item)
                                     return (
                                         <tr key={item.id}>
                                             <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', fontWeight: 700 }}>{formatDate(item.due_date)}</td>
-                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{template?.description || '-'}</td>
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{launchDescription}</td>
                                             <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{template?.categories?.name || '-'}</td>
                                             <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
                                                 {template?.account_id ? (
@@ -854,11 +1317,45 @@ export default function FixedExpensesPage() {
             </div>
 
             <div className="card" style={{ padding: 0, overflow: 'hidden', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)' }}>
-                <div style={{ padding: 16, borderBottom: '1px solid var(--color-border)', fontWeight: 700 }}>Modelos cadastrados</div>
+                <div style={{ padding: 16, borderBottom: '1px solid var(--color-border)', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                    <span>Modelos cadastrados</span>
+                    {selectedFixedExpenseIds.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                                {selectedFixedExpenseIds.length} selecionado(s)
+                            </span>
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={handleEditSelectedFixedExpense}
+                                disabled={selectedFixedExpenseIds.length !== 1}
+                            >
+                                <Pencil size={14} /> Editar selecionada
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={handleBulkDeleteFixedExpenses}
+                                disabled={bulkDeletingFixedExpenses}
+                                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+                            >
+                                <Trash2 size={14} /> {bulkDeletingFixedExpenses ? 'Excluindo...' : `Excluir (${selectedFixedExpenseIds.length})`}
+                            </button>
+                        </div>
+                    )}
+                </div>
                 <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                         <thead className="pro-table-header">
                             <tr>
+                                <th style={{ width: 40, paddingRight: 0 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={fixedExpenses.length > 0 && selectedFixedExpenseIds.length === fixedExpenses.length}
+                                        onChange={toggleFixedExpenseSelectAll}
+                                        style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                    />
+                                </th>
                                 <th>Descricao</th>
                                 <th>Dia venc.</th>
                                 <th>Categoria</th>
@@ -871,12 +1368,27 @@ export default function FixedExpensesPage() {
                         <tbody>
                             {fixedExpenses.length === 0 ? (
                                 <tr>
-                                    <td colSpan={7} style={{ textAlign: 'center', padding: 24 }}>Nenhum modelo cadastrado.</td>
+                                    <td colSpan={8} style={{ textAlign: 'center', padding: 24 }}>Nenhum modelo cadastrado.</td>
                                 </tr>
                             ) : (
                                 fixedExpenses.map(item => (
-                                    <tr key={item.id}>
-                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{item.description}</td>
+                                    <tr key={item.id} style={{ background: selectedFixedExpenseIds.includes(item.id) ? 'var(--color-accent-glow)' : 'transparent' }}>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', paddingRight: 0 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedFixedExpenseIds.includes(item.id)}
+                                                onChange={() => toggleFixedExpenseSelect(item.id)}
+                                                style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                            />
+                                        </td>
+                                        <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
+                                            <div style={{ fontWeight: 600 }}>{item.description}</div>
+                                            {item.is_installment && (
+                                                <div style={{ marginTop: 4, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                                    Parcelada em {item.installments_count || 0}x
+                                                </div>
+                                            )}
+                                        </td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{item.due_day}</td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>{item.categories?.name || '-'}</td>
                                         <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)' }}>
@@ -919,13 +1431,75 @@ export default function FixedExpensesPage() {
                                 </div>
                                 <div className="grid-2">
                                     <div className="input-group">
-                                        <label className="input-label">Valor</label>
+                                        <label className="input-label">
+                                            {form.is_installment
+                                                ? (form.installment_value_mode === 'total' ? 'Valor total' : 'Valor da parcela')
+                                                : 'Valor'}
+                                        </label>
                                         <input className="input" value={form.amount} onChange={e => setForm(prev => ({ ...prev, amount: formatMoneyInput(e.target.value) }))} required />
                                     </div>
                                     <div className="input-group">
                                         <label className="input-label">Dia de vencimento</label>
                                         <input className="input" type="number" min={1} max={31} value={form.due_day} onChange={e => setForm(prev => ({ ...prev, due_day: e.target.value }))} required />
                                     </div>
+                                </div>
+                                <div className="input-group">
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={form.is_installment}
+                                            onChange={e => setForm(prev => ({
+                                                ...prev,
+                                                is_installment: e.target.checked,
+                                                installment_value_mode: e.target.checked ? prev.installment_value_mode : 'per_installment',
+                                                installments_count: e.target.checked ? (prev.installments_count || '2') : '2',
+                                            }))}
+                                        />
+                                        <span style={{ fontSize: 14, fontWeight: 600 }}>Despesa parcelada</span>
+                                    </label>
+                                    {form.is_installment && (
+                                        <div style={{ marginTop: 10 }}>
+                                            <label className="input-label">Tipo do valor</label>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                                                <button
+                                                    type="button"
+                                                    className={`btn btn-sm ${form.installment_value_mode === 'per_installment' ? 'btn-primary' : 'btn-ghost'}`}
+                                                    onClick={() => setForm(prev => ({ ...prev, installment_value_mode: 'per_installment' }))}
+                                                    style={{ borderRadius: 8, justifyContent: 'center' }}
+                                                >
+                                                    Valor da parcela
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className={`btn btn-sm ${form.installment_value_mode === 'total' ? 'btn-primary' : 'btn-ghost'}`}
+                                                    onClick={() => setForm(prev => ({ ...prev, installment_value_mode: 'total' }))}
+                                                    style={{ borderRadius: 8, justifyContent: 'center' }}
+                                                >
+                                                    Valor total
+                                                </button>
+                                            </div>
+
+                                            <label className="input-label">Quantidade de parcelas</label>
+                                            <input
+                                                className="input"
+                                                type="number"
+                                                min={2}
+                                                max={360}
+                                                value={form.installments_count}
+                                                onChange={e => setForm(prev => ({ ...prev, installments_count: e.target.value }))}
+                                                required={form.is_installment}
+                                            />
+                                            {form.installment_value_mode === 'total' ? (
+                                                <p style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                                    O valor total sera dividido igualmente pelo numero de parcelas.
+                                                </p>
+                                            ) : (
+                                                <p style={{ marginTop: 6, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
+                                                    O valor da parcela sera repetido por todo o periodo parcelado.
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="input-group">
                                     <label className="input-label">Categoria</label>

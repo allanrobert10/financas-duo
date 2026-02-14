@@ -1,8 +1,9 @@
 'use client'
 
-import { Suspense, useEffect, useState, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { Suspense, useEffect, useMemo, useState, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { exportInvoices, generateThirdPartyTemplate, parseThirdPartyImport, type InvoiceExportRow, type InvoiceSummaryRow } from '@/utils/excel'
 import {
     formatCurrency,
     formatDate,
@@ -12,12 +13,26 @@ import {
     toDateInputValue,
 } from '@/lib/utils'
 import type { Transaction, Category, Account, Card, Tag } from '@/types/database'
-import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet, ChevronDown, Check, ChevronLeft, ChevronRight, Calendar, Search } from 'lucide-react'
+import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet, ChevronDown, Check, ChevronLeft, ChevronRight, Calendar, Search, Upload, Download } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
+
+const TRANSACTIONS_CACHE_KEY = 'transactions-page-cache-v1'
+const TRANSACTIONS_CACHE_TTL_MS = 2 * 60 * 1000
+
+function isInvoiceTransactionInPeriod(transaction: Transaction, card: Card, month: number, year: number): boolean {
+    if (!transaction.card_id) return false
+    const closingDay = card.closing_day || 31
+    const periodEnd = new Date(year, month - 1, closingDay)
+    const periodStart = new Date(year, month - 2, closingDay + 1)
+    const transactionDate = new Date(transaction.date + 'T00:00:00')
+    return transactionDate >= periodStart && transactionDate <= periodEnd
+}
 
 function TransactionsPageContent() {
     const supabase = createClient()
+    const router = useRouter()
     const searchParams = useSearchParams()
+    const now = new Date()
     const [transactions, setTransactions] = useState<Transaction[]>([])
     const [categories, setCategories] = useState<Category[]>([])
     const [accounts, setAccounts] = useState<Account[]>([])
@@ -29,6 +44,7 @@ function TransactionsPageContent() {
     const [saving, setSaving] = useState(false)
     const [showTagsDropdown, setShowTagsDropdown] = useState(false)
     const tagsRef = useRef<HTMLDivElement>(null)
+    const thirdPartyImportInputRef = useRef<HTMLInputElement | null>(null)
     const [viewMode, setViewMode] = useState<'list' | 'invoices' | 'third-party'>(() => {
         const fromUrl = searchParams.get('view')
         if (fromUrl === 'list' || fromUrl === 'invoices' || fromUrl === 'third-party') return fromUrl
@@ -36,15 +52,27 @@ function TransactionsPageContent() {
     })
     const isThirdPartyOnly = viewMode === 'third-party'
     const [selectedCardId, setSelectedCardId] = useState<string>('')
-    const [invoiceMonth, setInvoiceMonth] = useState(new Date().getMonth() + 1)
-    const [invoiceYear, setInvoiceYear] = useState(new Date().getFullYear())
+    const [invoiceMonth, setInvoiceMonth] = useState(now.getMonth() + 1)
+    const [invoiceYear, setInvoiceYear] = useState(now.getFullYear())
     const [householdId, setHouseholdId] = useState('')
     const [userId, setUserId] = useState('')
     const [filterType, setFilterType] = useState<string>('all')
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+    const [selectedThirdPartyIds, setSelectedThirdPartyIds] = useState<string[]>([])
+    const [isBulkDeletingThirdParty, setIsBulkDeletingThirdParty] = useState(false)
     const [searchTerm, setSearchTerm] = useState('')
     const [thirdPartySearchTerm, setThirdPartySearchTerm] = useState('')
+    const [listMonthFilter, setListMonthFilter] = useState<number>(() => {
+        const fromUrl = Number(searchParams.get('month'))
+        if (Number.isInteger(fromUrl) && fromUrl >= 1 && fromUrl <= 12) return fromUrl
+        return now.getMonth() + 1
+    })
+    const [listYearFilter, setListYearFilter] = useState<number>(() => {
+        const fromUrl = Number(searchParams.get('year'))
+        if (Number.isInteger(fromUrl) && fromUrl >= 2000 && fromUrl <= 3000) return fromUrl
+        return now.getFullYear()
+    })
     const [thirdPartyMonth, setThirdPartyMonth] = useState(() => {
         const fromUrl = Number(searchParams.get('month'))
         if (Number.isInteger(fromUrl) && fromUrl >= 1 && fromUrl <= 12) return fromUrl
@@ -56,6 +84,7 @@ function TransactionsPageContent() {
         return new Date().getFullYear()
     })
     const [markingThirdPartyId, setMarkingThirdPartyId] = useState<string | null>(null)
+    const [importingThirdParty, setImportingThirdParty] = useState(false)
     const [thirdPartyFilter, setThirdPartyFilter] = useState<'all' | 'pending' | 'paid'>(() => {
         const fromUrl = searchParams.get('thirdParty')
         if (fromUrl === 'pending' || fromUrl === 'paid' || fromUrl === 'all') return fromUrl
@@ -72,7 +101,71 @@ function TransactionsPageContent() {
         tag_ids: [] as string[],
     })
 
-    useEffect(() => { loadAll() }, [])
+    useEffect(() => {
+        let restoredFromCache = false
+
+        if (typeof window !== 'undefined') {
+            try {
+                const rawCache = sessionStorage.getItem(TRANSACTIONS_CACHE_KEY)
+                if (rawCache) {
+                    const parsed = JSON.parse(rawCache) as {
+                        savedAt?: number
+                        householdId?: string
+                        userId?: string
+                        transactions?: Transaction[]
+                        categories?: Category[]
+                        accounts?: Account[]
+                        cards?: Card[]
+                        tags?: Tag[]
+                    }
+
+                    const cacheAge = parsed?.savedAt ? Date.now() - parsed.savedAt : Number.POSITIVE_INFINITY
+                    if (cacheAge <= TRANSACTIONS_CACHE_TTL_MS) {
+                        if (Array.isArray(parsed.transactions)) setTransactions(parsed.transactions)
+                        if (Array.isArray(parsed.categories)) setCategories(parsed.categories)
+                        if (Array.isArray(parsed.accounts)) setAccounts(parsed.accounts)
+                        if (Array.isArray(parsed.cards)) setCards(parsed.cards)
+                        if (Array.isArray(parsed.tags)) setTags(parsed.tags)
+                        if (typeof parsed.householdId === 'string') setHouseholdId(parsed.householdId)
+                        if (typeof parsed.userId === 'string') setUserId(parsed.userId)
+
+                        const cachedCards = Array.isArray(parsed.cards) ? parsed.cards : []
+                        if (cachedCards.length > 0 && !selectedCardId) {
+                            const primary = cachedCards.find(c => c.is_primary) || cachedCards[0]
+                            setSelectedCardId(primary.id)
+                        }
+
+                        setLoading(false)
+                        restoredFromCache = true
+                    }
+                }
+            } catch (cacheError) {
+                console.warn('Falha ao restaurar cache de transacoes:', cacheError)
+            }
+        }
+
+        loadAll({ silent: restoredFromCache })
+    }, [])
+
+    useEffect(() => {
+        const fromUrl = searchParams.get('view')
+        if (fromUrl === 'list' || fromUrl === 'invoices' || fromUrl === 'third-party') {
+            setViewMode(fromUrl)
+        } else if (searchParams.get('focus') === 'third-party') {
+            setViewMode('third-party')
+        }
+
+        const monthFromUrl = Number(searchParams.get('month'))
+        const yearFromUrl = Number(searchParams.get('year'))
+        setListMonthFilter(Number.isInteger(monthFromUrl) && monthFromUrl >= 1 && monthFromUrl <= 12 ? monthFromUrl : now.getMonth() + 1)
+        setListYearFilter(Number.isInteger(yearFromUrl) && yearFromUrl >= 2000 && yearFromUrl <= 3000 ? yearFromUrl : now.getFullYear())
+
+        const thirdPartyFromUrl = searchParams.get('thirdParty')
+        if (thirdPartyFromUrl === 'pending' || thirdPartyFromUrl === 'paid' || thirdPartyFromUrl === 'all') {
+            setThirdPartyFilter(thirdPartyFromUrl)
+        }
+
+    }, [searchParams])
 
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
@@ -84,7 +177,14 @@ function TransactionsPageContent() {
         return () => document.removeEventListener("mousedown", handleClickOutside)
     }, [])
 
-    async function loadAll() {
+    useEffect(() => {
+        if (viewMode !== 'third-party') {
+            setSelectedThirdPartyIds([])
+        }
+    }, [viewMode])
+
+    async function loadAll(options?: { silent?: boolean }) {
+        if (!options?.silent) setLoading(true)
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return
         setUserId(user.id)
@@ -116,6 +216,26 @@ function TransactionsPageContent() {
         }
         if (tagR.data) setTags(tagR.data)
         setLoading(false)
+
+        if (typeof window !== 'undefined') {
+            try {
+                sessionStorage.setItem(
+                    TRANSACTIONS_CACHE_KEY,
+                    JSON.stringify({
+                        savedAt: Date.now(),
+                        householdId: profile?.household_id || '',
+                        userId: user.id,
+                        transactions: txR.data || [],
+                        categories: catR.data || [],
+                        accounts: accR.data || [],
+                        cards: cardR.data || [],
+                        tags: tagR.data || [],
+                    })
+                )
+            } catch (cacheError) {
+                console.warn('Falha ao salvar cache de transacoes:', cacheError)
+            }
+        }
     }
 
     function openCreate() {
@@ -265,6 +385,7 @@ function TransactionsPageContent() {
         await supabase.from('transaction_tags').delete().eq('transaction_id', id)
         await supabase.from('transactions').delete().eq('id', id)
         setSelectedIds(prev => prev.filter(i => i !== id))
+        setSelectedThirdPartyIds(prev => prev.filter(i => i !== id))
         loadAll()
     }
 
@@ -318,6 +439,181 @@ function TransactionsPageContent() {
         }
     }
 
+    async function handleBulkDeleteThirdParty() {
+        if (selectedThirdPartyIds.length === 0) return
+        if (!confirm(`Tem certeza que deseja excluir as ${selectedThirdPartyIds.length} transacoes de terceiros selecionadas?`)) return
+
+        setIsBulkDeletingThirdParty(true)
+        try {
+            await supabase
+                .from('transaction_tags')
+                .delete()
+                .in('transaction_id', selectedThirdPartyIds)
+
+            const { error } = await supabase
+                .from('transactions')
+                .delete()
+                .in('id', selectedThirdPartyIds)
+
+            if (error) throw error
+
+            setSelectedThirdPartyIds([])
+            await loadAll()
+        } catch (error) {
+            console.error('Erro ao excluir terceiros em massa:', error)
+            alert('Erro ao excluir algumas transacoes de terceiros.')
+        } finally {
+            setIsBulkDeletingThirdParty(false)
+        }
+    }
+
+    function handleEditSelectedThirdParty() {
+        if (selectedThirdPartyIds.length !== 1) {
+            alert('Selecione apenas 1 transacao para editar.')
+            return
+        }
+
+        const selectedTx = transactions.find(t => t.id === selectedThirdPartyIds[0])
+        if (!selectedTx) {
+            alert('Transacao selecionada nao encontrada.')
+            return
+        }
+
+        openEdit(selectedTx)
+    }
+
+    function normalizeImportKey(value: string): string {
+        return value
+            .trim()
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\s+/g, ' ')
+    }
+
+    function handleDownloadThirdPartyTemplate() {
+        generateThirdPartyTemplate()
+    }
+
+    async function handleImportThirdPartyData(e: React.ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        if (!householdId || !userId) {
+            alert('Nao foi possivel identificar usuario/familia para importar.')
+            e.target.value = ''
+            return
+        }
+
+        setImportingThirdParty(true)
+
+        try {
+            const importedRows = await parseThirdPartyImport(file)
+
+            if (importedRows.length === 0) {
+                alert('Nenhuma linha valida encontrada na planilha de terceiros.')
+                return
+            }
+
+            const [categoriesRes, accountsRes, cardsRes] = await Promise.all([
+                supabase.from('categories').select('id, name, type').eq('household_id', householdId),
+                supabase.from('accounts').select('id, name').eq('household_id', householdId),
+                supabase.from('cards').select('id, name').eq('household_id', householdId),
+            ])
+
+            if (categoriesRes.error) throw categoriesRes.error
+            if (accountsRes.error) throw accountsRes.error
+            if (cardsRes.error) throw cardsRes.error
+
+            const categoryMap = new Map(
+                (categoriesRes.data || [])
+                    .filter(c => c.type === 'expense')
+                    .map(c => [normalizeImportKey(c.name), c.id] as const)
+            )
+            const accountMap = new Map((accountsRes.data || []).map(a => [normalizeImportKey(a.name), a.id] as const))
+            const cardMap = new Map((cardsRes.data || []).map(c => [normalizeImportKey(c.name), c.id] as const))
+
+            const insertRows: any[] = []
+            const validationErrors: string[] = []
+
+            importedRows.forEach((row, index) => {
+                const lineNumber = index + 2
+                const categoryId = categoryMap.get(normalizeImportKey(row.category))
+                if (!categoryId) {
+                    validationErrors.push(`Linha ${lineNumber}: categoria nao encontrada (${row.category}).`)
+                    return
+                }
+
+                let accountId: string | null = null
+                let cardId: string | null = null
+                const paymentNameKey = normalizeImportKey(row.paymentName)
+
+                if (row.paymentMethod === 'conta') {
+                    accountId = accountMap.get(paymentNameKey) || null
+                    if (!accountId) {
+                        validationErrors.push(`Linha ${lineNumber}: conta nao encontrada (${row.paymentName}).`)
+                        return
+                    }
+                } else {
+                    cardId = cardMap.get(paymentNameKey) || null
+                    if (!cardId) {
+                        validationErrors.push(`Linha ${lineNumber}: cartao nao encontrado (${row.paymentName}).`)
+                        return
+                    }
+                }
+
+                const status = row.status === 'paid' ? 'paid' : 'pending'
+                insertRows.push({
+                    household_id: householdId,
+                    user_id: userId,
+                    type: 'expense',
+                    amount: Math.abs(Number(row.amount)),
+                    description: row.description,
+                    date: row.date,
+                    category_id: categoryId,
+                    account_id: accountId,
+                    card_id: cardId,
+                    notes: row.notes || null,
+                    is_recurring: false,
+                    recurrence_type: null,
+                    is_third_party: true,
+                    third_party_name: row.thirdPartyName,
+                    third_party_status: status,
+                    third_party_paid_at: status === 'paid' ? new Date().toISOString() : null,
+                })
+            })
+
+            if (insertRows.length === 0) {
+                const errorPreview = validationErrors.slice(0, 8).join('\n')
+                alert(`Nenhuma linha valida para importar.\n${errorPreview}`)
+                return
+            }
+
+            const chunkSize = 200
+            for (let i = 0; i < insertRows.length; i += chunkSize) {
+                const batch = insertRows.slice(i, i + chunkSize)
+                const { error } = await supabase.from('transactions').insert(batch as any)
+                if (error) throw error
+            }
+
+            await loadAll()
+
+            if (validationErrors.length > 0) {
+                const errorPreview = validationErrors.slice(0, 8).join('\n')
+                const hiddenErrors = validationErrors.length > 8 ? `\n... +${validationErrors.length - 8} erro(s)` : ''
+                alert(`Importacao concluida com ressalvas.\nImportadas: ${insertRows.length}\nIgnoradas: ${validationErrors.length}\n\n${errorPreview}${hiddenErrors}`)
+            } else {
+                alert(`Importacao de terceiros concluida com sucesso.\n${insertRows.length} transacao(oes) importada(s).`)
+            }
+        } catch (error) {
+            console.error('Erro ao importar terceiros:', error)
+            alert(getSaveErrorMessage(error))
+        } finally {
+            setImportingThirdParty(false)
+            e.target.value = ''
+        }
+    }
+
     function toggleSelect(id: string) {
         setSelectedIds(prev =>
             prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
@@ -332,24 +628,49 @@ function TransactionsPageContent() {
         }
     }
 
-    const filteredTx = (viewMode === 'list'
-        ? (filterType === 'all' ? transactions : transactions.filter(t => t.type === filterType))
-        : transactions.filter(t => {
-            if (!selectedCardId || t.card_id !== selectedCardId) return false
-            const card = cards.find(c => c.id === selectedCardId)
-            if (!card) return false
-            const closingDay = card.closing_day || 31
-            const periodEnd = new Date(invoiceYear, invoiceMonth - 1, closingDay)
-            const periodStart = new Date(invoiceYear, invoiceMonth - 2, closingDay + 1)
-            const transactionDate = new Date(t.date + 'T00:00:00')
-            return transactionDate >= periodStart && transactionDate <= periodEnd
-        })).filter(t => {
-            const query = searchTerm.toLowerCase()
-            return t.description.toLowerCase().includes(query)
-                || (t.third_party_name || '').toLowerCase().includes(query)
-        })
+    function toggleThirdPartySelect(id: string) {
+        setSelectedThirdPartyIds(prev =>
+            prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
+        )
+    }
 
-    const invoiceTotal = viewMode === 'invoices' ? filteredTx.reduce((acc, t) => acc + t.amount, 0) : 0
+    const cardById = useMemo(() => new Map(cards.map(card => [card.id, card])), [cards])
+    const categoryById = useMemo(() => new Map(categories.map(category => [category.id, category.name])), [categories])
+
+    const invoiceRowsForSelectedCard = transactions.filter(t => {
+        if (!selectedCardId || t.card_id !== selectedCardId) return false
+        const card = cardById.get(selectedCardId)
+        if (!card) return false
+        return isInvoiceTransactionInPeriod(t, card, invoiceMonth, invoiceYear)
+    })
+
+    const invoiceRowsAllCards = transactions.filter(t => {
+        if (!t.card_id) return false
+        const card = cardById.get(t.card_id)
+        if (!card) return false
+        return isInvoiceTransactionInPeriod(t, card, invoiceMonth, invoiceYear)
+    })
+
+    const filteredTx = (viewMode === 'list'
+        ? (() => {
+            let rows = filterType === 'all' ? transactions : transactions.filter(t => t.type === filterType)
+
+            rows = rows.filter(t => {
+                const [tYear, tMonth] = t.date.split('-').map(Number)
+                return tMonth === listMonthFilter && tYear === listYearFilter
+            })
+
+            return rows
+        })()
+        : invoiceRowsForSelectedCard
+    ).filter(t => {
+        const query = searchTerm.toLowerCase()
+        return t.description.toLowerCase().includes(query)
+            || (t.third_party_name || '').toLowerCase().includes(query)
+    })
+
+    const invoiceTotal = viewMode === 'invoices' ? invoiceRowsForSelectedCard.reduce((acc, t) => acc + t.amount, 0) : 0
+    const invoiceAllCardsTotal = viewMode === 'invoices' ? invoiceRowsAllCards.reduce((acc, t) => acc + t.amount, 0) : 0
     const thirdPartyMonthRows = transactions
         .filter(t => t.type === 'expense' && t.is_third_party)
         .filter(t => {
@@ -383,6 +704,25 @@ function TransactionsPageContent() {
         })
     const thirdPartyVisibleTotalValue = thirdPartyRows.reduce((acc, t) => acc + Number(t.amount), 0)
 
+    function toggleThirdPartySelectAll() {
+        if (thirdPartyRows.length === 0) return
+        if (selectedThirdPartyIds.length === thirdPartyRows.length) {
+            setSelectedThirdPartyIds([])
+            return
+        }
+        setSelectedThirdPartyIds(thirdPartyRows.map(t => t.id))
+    }
+
+    useEffect(() => {
+        setSelectedThirdPartyIds(prev => {
+            const filtered = prev.filter(id => thirdPartyRows.some(t => t.id === id))
+            if (filtered.length === prev.length && filtered.every((id, index) => id === prev[index])) {
+                return prev
+            }
+            return filtered
+        })
+    }, [transactions, thirdPartyMonth, thirdPartyYear, thirdPartyFilter, thirdPartySearchTerm])
+
     const prevInvoice = () => {
         if (invoiceMonth === 1) { setInvoiceMonth(12); setInvoiceYear(y => y - 1) }
         else setInvoiceMonth(m => m - 1)
@@ -391,6 +731,22 @@ function TransactionsPageContent() {
         if (invoiceMonth === 12) { setInvoiceMonth(1); setInvoiceYear(y => y + 1) }
         else setInvoiceMonth(m => m + 1)
     }
+    const prevListMonth = () => {
+        if (listMonthFilter === 1) {
+            setListMonthFilter(12)
+            setListYearFilter(listYearFilter - 1)
+            return
+        }
+        setListMonthFilter(listMonthFilter - 1)
+    }
+    const nextListMonth = () => {
+        if (listMonthFilter === 12) {
+            setListMonthFilter(1)
+            setListYearFilter(listYearFilter + 1)
+            return
+        }
+        setListMonthFilter(listMonthFilter + 1)
+    }
     const prevThirdPartyMonth = () => {
         if (thirdPartyMonth === 1) { setThirdPartyMonth(12); setThirdPartyYear(y => y - 1) }
         else setThirdPartyMonth(m => m - 1)
@@ -398,6 +754,40 @@ function TransactionsPageContent() {
     const nextThirdPartyMonth = () => {
         if (thirdPartyMonth === 12) { setThirdPartyMonth(1); setThirdPartyYear(y => y + 1) }
         else setThirdPartyMonth(m => m + 1)
+    }
+
+    function handleDownloadInvoices() {
+        if (invoiceRowsAllCards.length === 0) {
+            alert('Nao ha faturas para baixar no periodo selecionado.')
+            return
+        }
+
+        const summaryMap = new Map<string, InvoiceSummaryRow>()
+        for (const tx of invoiceRowsAllCards) {
+            const cardName = (tx.card_id && cardById.get(tx.card_id)?.name) || 'Cartao nao identificado'
+            const existing = summaryMap.get(cardName) || { cardName, transactionsCount: 0, total: 0 }
+            existing.transactionsCount += 1
+            existing.total += Number(tx.amount)
+            summaryMap.set(cardName, existing)
+        }
+        const summaryRows: InvoiceSummaryRow[] = Array.from(summaryMap.values()).sort((a, b) => a.cardName.localeCompare(b.cardName))
+
+        const detailRows: InvoiceExportRow[] = [...invoiceRowsAllCards]
+            .sort((a, b) => {
+                if (a.date !== b.date) return b.date.localeCompare(a.date)
+                return (b.created_at || '').localeCompare(a.created_at || '')
+            })
+            .map(tx => ({
+                date: tx.date,
+                cardName: (tx.card_id && cardById.get(tx.card_id)?.name) || 'Cartao nao identificado',
+                description: tx.description,
+                category: tx.category_id ? (categoryById.get(tx.category_id) || 'Sem categoria') : 'Sem categoria',
+                type: tx.type === 'income' ? 'income' : 'expense',
+                amount: Number(tx.amount),
+            }))
+
+        const fileName = `faturas_${invoiceYear}_${String(invoiceMonth).padStart(2, '0')}`
+        exportInvoices(fileName, detailRows, summaryRows, invoiceAllCardsTotal)
     }
 
     const filteredCategories = categories.filter(c =>
@@ -423,7 +813,7 @@ function TransactionsPageContent() {
                     <h1>Transações</h1>
                     <p>Gerencie suas receitas e despesas com precisão</p>
                 </div>
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div className="transactions-header-actions" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                     {selectedIds.length > 0 && !isThirdPartyOnly && (
                         <button
                             className="btn btn-secondary"
@@ -451,8 +841,8 @@ function TransactionsPageContent() {
 
             {/* View Switching & Main Filters */}
             <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div className="transactions-controls-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 16 }}>
+                <div className="transactions-controls-left" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', background: 'var(--color-bg-tertiary)', padding: 4, borderRadius: 12, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
                         <button
                             className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
@@ -475,9 +865,16 @@ function TransactionsPageContent() {
                         >
                             Terceiros
                         </button>
+                        <button
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => router.push('/fixed-expenses')}
+                            style={{ borderRadius: 8, fontSize: 13, fontWeight: 700, padding: '6px 16px', transition: 'all 0.2s' }}
+                        >
+                            Despesas Fixas
+                        </button>
                     </div>
 
-                    {!isThirdPartyOnly && <div className="search-input-wrapper" style={{ position: 'relative', width: 280 }}>
+                    {!isThirdPartyOnly && <div className="search-input-wrapper" style={{ position: 'relative', width: 280, maxWidth: '100%' }}>
                         <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)' }} />
                         <input
                             type="text"
@@ -498,22 +895,36 @@ function TransactionsPageContent() {
                 </div>
 
                         {viewMode === 'list' ? (
-                    <div className="filter-bar" style={{ margin: 0, padding: 4, background: 'var(--color-bg-tertiary)', borderRadius: 12 }}>
-                        <button
-                            className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
-                            onClick={() => setFilterType('all')}>
-                            Todas
-                        </button>
-                        <button
-                            className={`filter-btn ${filterType === 'income' ? 'active income' : ''}`}
-                            onClick={() => setFilterType('income')}>
-                            <TrendingUp size={16} /> Receitas
-                        </button>
-                        <button
-                            className={`filter-btn ${filterType === 'expense' ? 'active expense' : ''}`}
-                            onClick={() => setFilterType('expense')}>
-                            <TrendingDown size={16} /> Despesas
-                        </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
+                            <button className="btn btn-icon btn-ghost btn-sm" onClick={prevListMonth} style={{ borderRadius: 10 }}>
+                                <ChevronLeft size={18} />
+                            </button>
+                            <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 13, minWidth: 180, textAlign: 'center', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Lancamentos de {getMonthName(listMonthFilter)} {listYearFilter}
+                            </span>
+                            <button className="btn btn-icon btn-ghost btn-sm" onClick={nextListMonth} style={{ borderRadius: 10 }}>
+                                <ChevronRight size={18} />
+                            </button>
+                        </div>
+
+                        <div className="filter-bar" style={{ margin: 0, padding: 4, background: 'var(--color-bg-tertiary)', borderRadius: 12 }}>
+                            <button
+                                className={`filter-btn ${filterType === 'all' ? 'active' : ''}`}
+                                onClick={() => setFilterType('all')}>
+                                Todas
+                            </button>
+                            <button
+                                className={`filter-btn ${filterType === 'income' ? 'active income' : ''}`}
+                                onClick={() => setFilterType('income')}>
+                                <TrendingUp size={16} /> Receitas
+                            </button>
+                            <button
+                                className={`filter-btn ${filterType === 'expense' ? 'active expense' : ''}`}
+                                onClick={() => setFilterType('expense')}>
+                                <TrendingDown size={16} /> Despesas
+                            </button>
+                        </div>
                     </div>
                 ) : viewMode === 'invoices' ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 14, border: '1px solid var(--color-border)', boxShadow: 'var(--shadow-sm)' }}>
@@ -557,9 +968,18 @@ function TransactionsPageContent() {
                         ))}
                     </div>
 
-                    <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Total da Fatura</div>
-                        <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--color-text-primary)' }}>{formatCurrency(invoiceTotal)}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <button className="btn btn-secondary btn-sm" onClick={handleDownloadInvoices} disabled={invoiceRowsAllCards.length === 0}>
+                            <Download size={14} /> Baixar Faturas
+                        </button>
+                        <div style={{ textAlign: 'right', minWidth: 170 }}>
+                            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Total da Fatura</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--color-text-primary)' }}>{formatCurrency(invoiceTotal)}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', minWidth: 190 }}>
+                            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Total de Todas as Faturas</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--color-accent)' }}>{formatCurrency(invoiceAllCardsTotal)}</div>
+                        </div>
                     </div>
                 </div>
                     )}
@@ -774,6 +1194,19 @@ function TransactionsPageContent() {
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                            <button className="btn btn-secondary btn-sm" onClick={handleDownloadThirdPartyTemplate} disabled={importingThirdParty}>
+                                <Download size={14} /> Baixar Modelo
+                            </button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => thirdPartyImportInputRef.current?.click()} disabled={importingThirdParty}>
+                                <Upload size={14} /> {importingThirdParty ? 'Importando...' : 'Importar Planilha'}
+                            </button>
+                            <input
+                                ref={thirdPartyImportInputRef}
+                                type="file"
+                                accept=".xlsx,.xls"
+                                onChange={handleImportThirdPartyData}
+                                style={{ display: 'none' }}
+                            />
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--color-bg-tertiary)', padding: '4px 6px', borderRadius: 12, border: '1px solid var(--color-border)' }}>
                                 <button className="btn btn-icon btn-ghost btn-sm" onClick={prevThirdPartyMonth} style={{ borderRadius: 8 }}>
                                     <ChevronLeft size={16} />
@@ -872,6 +1305,31 @@ function TransactionsPageContent() {
                         </div>
                     </div>
 
+                    {selectedThirdPartyIds.length > 0 && (
+                        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                                {selectedThirdPartyIds.length} selecionada(s)
+                            </span>
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={handleEditSelectedThirdParty}
+                                disabled={selectedThirdPartyIds.length !== 1}
+                            >
+                                <Pencil size={14} /> Editar selecionada
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={handleBulkDeleteThirdParty}
+                                disabled={isBulkDeletingThirdParty}
+                                style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
+                            >
+                                <Trash2 size={14} /> {isBulkDeletingThirdParty ? 'Excluindo...' : `Excluir (${selectedThirdPartyIds.length})`}
+                            </button>
+                        </div>
+                    )}
+
                     <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--color-text-tertiary)' }}>
                         Mostrando {thirdPartyRows.length} registro(s) | Total filtrado: {formatCurrency(thirdPartyVisibleTotalValue)}
                     </div>
@@ -880,27 +1338,47 @@ function TransactionsPageContent() {
                     <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                         <thead className="pro-table-header">
                             <tr>
+                                <th style={{ width: 40, paddingRight: 0 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={thirdPartyRows.length > 0 && selectedThirdPartyIds.length === thirdPartyRows.length}
+                                        onChange={toggleThirdPartySelectAll}
+                                        style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                    />
+                                </th>
                                 <th>Data</th>
                                 <th>Descricao</th>
                                 <th>Terceiro</th>
                                 <th>Pagamento</th>
                                 <th style={{ textAlign: 'right' }}>Valor</th>
                                 <th>Status</th>
-                                <th style={{ width: 160, textAlign: 'center' }}>Acao</th>
+                                <th style={{ width: 220, textAlign: 'center' }}>Acao</th>
                             </tr>
                         </thead>
                         <tbody>
                             {thirdPartyRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan={7} style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--color-text-tertiary)' }}>
+                                    <td colSpan={8} style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--color-text-tertiary)' }}>
                                         Nenhuma despesa de terceiro encontrada para {getMonthName(thirdPartyMonth)} {thirdPartyYear}.
                                     </td>
                                 </tr>
                             ) : (
                                 thirdPartyRows.map((t, index) => {
                                     const status = (t.third_party_status || 'pending') === 'paid' ? 'paid' : 'pending'
+                                    const isSelected = selectedThirdPartyIds.includes(t.id)
                                     return (
-                                        <tr key={`third-party-${t.id}`} style={{ background: index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)' }}>
+                                        <tr
+                                            key={`third-party-${t.id}`}
+                                            style={{ background: isSelected ? 'var(--color-accent-glow)' : (index % 2 === 0 ? 'transparent' : 'var(--color-bg-tertiary)') }}
+                                        >
+                                            <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', paddingRight: 0 }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    onChange={() => toggleThirdPartySelect(t.id)}
+                                                    style={{ width: 16, height: 16, cursor: 'pointer', borderRadius: 4 }}
+                                                />
+                                            </td>
                                             <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
                                                 {formatDate(t.date)}
                                             </td>
@@ -931,18 +1409,35 @@ function TransactionsPageContent() {
                                                 </span>
                                             </td>
                                             <td style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--color-border)', textAlign: 'center' }}>
-                                                {status === 'paid' ? (
-                                                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-income)' }}>Ja pago</span>
-                                                ) : (
+                                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                                     <button
-                                                        className="btn btn-sm btn-primary"
-                                                        onClick={() => handleMarkThirdPartyPaid(t.id)}
-                                                        disabled={markingThirdPartyId === t.id}
-                                                        style={{ borderRadius: 8, padding: '0 12px', height: 32 }}
+                                                        className="btn btn-icon btn-ghost"
+                                                        onClick={() => openEdit(t)}
+                                                        title="Editar"
                                                     >
-                                                        {markingThirdPartyId === t.id ? 'Salvando...' : 'Marcar pago'}
+                                                        <Pencil size={14} />
                                                     </button>
-                                                )}
+                                                    <button
+                                                        className="btn btn-icon btn-ghost"
+                                                        onClick={() => handleDelete(t.id)}
+                                                        title="Excluir"
+                                                        style={{ color: 'var(--color-danger)' }}
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                    {status === 'paid' ? (
+                                                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-income)' }}>Ja pago</span>
+                                                    ) : (
+                                                        <button
+                                                            className="btn btn-sm btn-primary"
+                                                            onClick={() => handleMarkThirdPartyPaid(t.id)}
+                                                            disabled={markingThirdPartyId === t.id}
+                                                            style={{ borderRadius: 8, padding: '0 12px', height: 32 }}
+                                                        >
+                                                            {markingThirdPartyId === t.id ? 'Salvando...' : 'Marcar pago'}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </td>
                                         </tr>
                                     )
