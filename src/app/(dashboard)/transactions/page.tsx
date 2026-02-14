@@ -2,7 +2,14 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency, formatDate, getMonthName } from '@/lib/utils'
+import {
+    formatCurrency,
+    formatDate,
+    getMonthName,
+    getTodayDateInputValue,
+    parseDateInputValue,
+    toDateInputValue,
+} from '@/lib/utils'
 import type { Transaction, Category, Account, Card, Tag } from '@/types/database'
 import { Plus, Pencil, Trash2, ArrowLeftRight, X, TrendingUp, TrendingDown, CreditCard, Wallet, ChevronDown, Check, ChevronLeft, ChevronRight, Calendar, Search } from 'lucide-react'
 import { SkeletonTable } from '@/components/Skeleton'
@@ -33,7 +40,7 @@ export default function TransactionsPage() {
 
     const [form, setForm] = useState({
         description: '', amount: '', type: 'expense' as string,
-        category_id: '', account_id: '', card_id: '', date: new Date().toISOString().split('T')[0],
+        category_id: '', account_id: '', card_id: '', date: getTodayDateInputValue(),
         notes: '', is_recurring: false, recurrence_type: '' as string,
         installments_count: 2,
         tag_ids: [] as string[],
@@ -60,7 +67,11 @@ export default function TransactionsPage() {
         if (profile?.household_id) setHouseholdId(profile.household_id)
 
         const [txR, catR, accR, cardR, tagR] = await Promise.all([
-            supabase.from('transactions').select('*, transaction_tags(tag_id)').order('date', { ascending: false }).order('created_at', { ascending: false }),
+            supabase
+                .from('transactions')
+                .select('*, transaction_tags(tag_id)')
+                .order('date', { ascending: false })
+                .order('created_at', { ascending: false, nullsFirst: false }),
             supabase.from('categories').select('*'),
             supabase.from('accounts').select('*').eq('is_active', true),
             supabase.from('cards').select('*').eq('is_active', true),
@@ -85,11 +96,7 @@ export default function TransactionsPage() {
         setEditing(null)
         setForm({
             description: '', amount: '', type: 'expense', category_id: '',
-            account_id: '', card_id: '',
-            date: (() => {
-                const d = new Date()
-                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-            })(),
+            account_id: '', card_id: '', date: getTodayDateInputValue(),
             notes: '', is_recurring: false, recurrence_type: '', installments_count: 2,
             tag_ids: [],
         })
@@ -140,16 +147,14 @@ export default function TransactionsPage() {
                             ...basePayload,
                         } as any,
                         form.installments_count,
-                        // Use local time (00:00:00) explicitly to ensure correct date in user's timezone (America/Sao_Paulo)
-                        new Date(form.date + 'T00:00:00')
+                        parseDateInputValue(form.date)
                     )
 
                     const transactionsToInsert = installments.map(t => ({
                         description: t.description,
                         amount: t.amount / (form.installments_count || 1), // Divide o valor total entre as parcelas
                         type: t.type,
-                        // Use local date parts to construct YYYY-MM-DD string, avoiding UTC conversion shift
-                        date: `${t.date.getFullYear()}-${String(t.date.getMonth() + 1).padStart(2, '0')}-${String(t.date.getDate()).padStart(2, '0')}`,
+                        date: toDateInputValue(t.date),
                         category_id: t.category_id,
                         account_id: t.account_id || null,
                         card_id: form.card_id || null,

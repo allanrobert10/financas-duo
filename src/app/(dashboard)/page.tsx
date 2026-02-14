@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency, getMonthName } from '@/lib/utils'
+import { formatCurrency, formatDate, getMonthName, getTodayDateInputValue } from '@/lib/utils'
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
     PieChart as RePieChart, Pie, Cell
@@ -32,6 +32,7 @@ export default function DashboardPage() {
     const [savingBudget, setSavingBudget] = useState(false)
 
     const now = new Date()
+    const todayDate = getTodayDateInputValue()
     const [month, setMonth] = useState(now.getMonth() + 1)
     const [year, setYear] = useState(now.getFullYear())
 
@@ -59,6 +60,7 @@ export default function DashboardPage() {
                 .select('*')
                 .eq('household_id', profileRes.data.household_id)
                 .order('date', { ascending: false })
+                .order('created_at', { ascending: false, nullsFirst: false })
 
             if (txData) setTransactions(txData)
         }
@@ -235,8 +237,8 @@ export default function DashboardPage() {
     const barData = barPeriod === 'today' ? [
         {
             name: 'Hoje',
-            receitas: transactions.filter(t => t.type === 'income' && t.date === now.toISOString().split('T')[0]).reduce((s, t) => s + t.amount, 0),
-            despesas: transactions.filter(t => t.type === 'expense' && t.date === now.toISOString().split('T')[0]).reduce((s, t) => s + t.amount, 0),
+            receitas: transactions.filter(t => t.type === 'income' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
+            despesas: transactions.filter(t => t.type === 'expense' && t.date === todayDate).reduce((s, t) => s + t.amount, 0),
         }
     ] : Array.from({ length: barPeriod as number }, (_, i) => {
         let m = month - ((barPeriod as number) - 1 - i)
@@ -543,7 +545,7 @@ export default function DashboardPage() {
                                         const cat = categories.find(c => c.id === tx.category_id)
                                         return (
                                             <tr key={tx.id} className="table-row-hover">
-                                                <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{new Date(tx.date).toLocaleDateString('pt-BR')}</td>
+                                                <td style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>{formatDate(tx.date)}</td>
                                                 <td>
                                                     <div style={{ fontWeight: 700, color: 'var(--color-text-primary)', fontSize: 14 }}>{tx.description}</div>
                                                 </td>
